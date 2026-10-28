@@ -41,7 +41,13 @@
 //     carries, unpacked by Windows' own tar; the newest exe and the newest
 //     data patches, by the indexes the game updates itself by, each checked
 //     by its sha256. Asked first, with the sizes; then Survivor UI installed
-//     next. A line at the bottom says whose game it is, with a link to his site;
+//     next. The full package also from the mirrors the game's Discord gave
+//     (mirrors.json in its repository, the ones built in when it is out of reach):
+//     each timed first and offered in a list with its speed, the fastest
+//     picked, or a package the player downloaded already; a mirror's taken
+//     only with the size and sha256 Aethus gave. A break taken up where it
+//     stopped, and Try another source (the Play button meanwhile) goes on
+//     with the next. A line at the bottom says whose game it is, with a link to his site;
 //   - keeps the game current: under the folder, the game's version (read in
 //     its exe) against the newest its server lists, asked with each look at
 //     GitHub; a newer one out, Play turns to "Update game", which takes the
@@ -62,7 +68,8 @@
 //   - counts the playtime it sees (the game's process watched), for Play's
 //     numbers and Statistics;
 //   - updates itself: a release's SurvivorUI-Installer.zip carries its
-//     version in the asset's label ("Installer 1.3.0"). At the top right,
+//     version in the asset's label ("Installer 1.3.0"), from 1.5.7 in the
+//     launcher's own repository (LauncherRepo). At the top right,
 //     its version and Check for updates; a newer one lights a green arrow
 //     and the button turns to it, in the tray too; with "Update the
 //     installer by itself" (on by default) it is taken at once: the running
@@ -91,7 +98,7 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Azeroth SurvivorUI Launcher")]
 [assembly: System.Reflection.AssemblyProduct("Survivor UI")]
-[assembly: System.Reflection.AssemblyVersion("1.5.7.0")]
+[assembly: System.Reflection.AssemblyVersion("1.5.8.0")]
 
 namespace SurvivorInstaller
 {
@@ -1570,15 +1577,30 @@ namespace SurvivorInstaller
             }
         }
 
+        // The same box with a list under the words, one line picked (the
+        // given one at first): the line picked on Yes, -1 on No.
+        int Choose(string text, string caption, string[] options, int picked)
+        {
+            using (ArtBox box = new ArtBox(this, text, caption, MessageBoxButtons.YesNo, MessageBoxIcon.Question, options, picked))
+                return box.ShowDialog(this) == DialogResult.Yes ? box.Picked : -1;
+        }
+
         class ArtBox : Form
         {
             readonly float k;
             readonly string words, title, gem;
             readonly Rectangle wordsAt, gemAt;
             readonly int band;
+            readonly string[] options;
+            readonly Rectangle[] optionAt;
+            int hotOption = -1;
+            public int Picked;
             Bitmap stone;
 
             public ArtBox(MainForm owner, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon)
+                : this(owner, text, caption, buttons, icon, null, 0) { }
+
+            public ArtBox(MainForm owner, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, string[] lines, int picked)
             {
                 k = owner.ui;
                 words = text ?? "";
@@ -1603,6 +1625,26 @@ namespace SurvivorInstaller
                 gemAt = new Rectangle(pad, top, gemSize, (int)(gemSize * 52f / 47f));
                 wordsAt = new Rectangle(pad + gemSize + gap, top, textWidth, measured.Height + 4);
                 int buttonsTop = top + Math.Max(measured.Height, gemAt.Height) + (int)(22 * k);
+                // The list: a line each, a ring by it, gold and filled when picked.
+                options = lines ?? new string[0];
+                optionAt = new Rectangle[options.Length];
+                Picked = Math.Max(0, Math.Min(picked, options.Length - 1));
+                int row = (int)(26 * k), optionsTop = top + measured.Height + (int)(8 * k);
+                for (int i = 0; i < options.Length; i++)
+                    optionAt[i] = new Rectangle(wordsAt.X, optionsTop + i * row, textWidth, row);
+                if (options.Length > 0) buttonsTop = Math.Max(buttonsTop, optionsTop + options.Length * row + (int)(18 * k));
+                MouseMove += delegate (object sender, MouseEventArgs e)
+                {
+                    int over = Array.FindIndex(optionAt, at => at.Contains(e.Location));
+                    Cursor = over >= 0 ? Cursors.Hand : Cursors.Default;
+                    if (over != hotOption) { hotOption = over; Invalidate(); }
+                };
+                MouseLeave += delegate { if (hotOption >= 0) { hotOption = -1; Invalidate(); } };
+                MouseClick += delegate (object sender, MouseEventArgs e)
+                {
+                    int over = Array.FindIndex(optionAt, at => at.Contains(e.Location));
+                    if (over >= 0 && over != Picked) { Picked = over; Invalidate(); }
+                };
                 int buttonHeight = (int)(32 * k);
                 ClientSize = new Size(width, buttonsTop + buttonHeight + (int)(22 * k));
 
@@ -1646,6 +1688,18 @@ namespace SurvivorInstaller
                 }
             }
 
+            // Up and Down move along the list.
+            protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+            {
+                if (options.Length > 0 && (keyData == Keys.Up || keyData == Keys.Down))
+                {
+                    Picked = Math.Max(0, Math.Min(options.Length - 1, Picked + (keyData == Keys.Up ? -1 : 1)));
+                    Invalidate();
+                    return true;
+                }
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+
             protected override void WndProc(ref Message m)
             {
                 base.WndProc(ref m);
@@ -1677,6 +1731,26 @@ namespace SurvivorInstaller
                 DrawArt(g, Art(gem), gemAt);
                 TextRenderer.DrawText(g, words, Font, wordsAt, Color.FromArgb(226, 220, 204),
                     TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.Top);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                for (int i = 0; i < options.Length; i++)
+                {
+                    Rectangle at = optionAt[i];
+                    int d = (int)(14 * k);
+                    RectangleF ring = new RectangleF(at.X + 1, at.Y + (at.Height - d) / 2f, d, d);
+                    using (Pen pen = new Pen(i == Picked ? Gold : Color.FromArgb(150, 136, 100), Math.Max(1f, 1.5f * k)))
+                        g.DrawEllipse(pen, ring);
+                    if (i == Picked)
+                    {
+                        float inset = 3.5f * k;
+                        using (Brush dot = new SolidBrush(Gold))
+                            g.FillEllipse(dot, ring.X + inset, ring.Y + inset, d - 2 * inset, d - 2 * inset);
+                    }
+                    Rectangle line = new Rectangle(at.X + d + (int)(10 * k), at.Y, at.Width - d - (int)(10 * k), at.Height);
+                    Color color = i == Picked ? Gold : i == hotOption ? Color.FromArgb(255, 244, 210) : Color.FromArgb(200, 194, 178);
+                    TextRenderer.DrawText(g, options[i], Font, line, color,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                }
+                g.SmoothingMode = SmoothingMode.Default;
                 SliceFrame(g, Art("frame"), ClientRectangle, 12, 12, 12, 14, 90, k * 0.9f, false);
             }
 
@@ -2213,7 +2287,12 @@ namespace SurvivorInstaller
             playButton.Location = new Point(20, 46);
             playButton.Size = new Size(300, 62);
             playButton.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
-            playButton.Click += delegate { if (GameMissing() || GameBehind()) GetGame(); else Play(); };
+            playButton.Click += delegate
+            {
+                if (gettingGame && packageSwitchable) SwitchPackageSource();
+                else if (GameMissing() || GameBehind()) GetGame();
+                else Play();
+            };
             // The game's version, small, under its words, the two centred
             // together (playNote).
             Forge(playButton);
@@ -5314,6 +5393,14 @@ namespace SurvivorInstaller
                 ? "Download Azeroth Survivors, Aethus' game, from his own servers (wow.aethus.pl)."
                 : behind ? "Azeroth Survivors " + game.Latest + " is out: download it from wow.aethus.pl, checked. (The game would also update itself as it starts.)"
                 : "Start the game; the launcher steps into the tray.");
+            // The full package downloading, with another source there: the
+            // button moves it to the next one.
+            if (gettingGame && packageSwitchable)
+            {
+                playButton.Text = "⇄  Try another source";
+                playButton.Enabled = true;
+                tips.SetToolTip(playButton, "Download the game's package from the next source instead (Aethus' site or a mirror).");
+            }
             playItem.Enabled = playable && !missing;
             // Under its words, small: the game's version; an update out, from
             // which to which (the newer data alone: its version and "new data").
@@ -6465,10 +6552,181 @@ namespace SurvivorInstaller
             public readonly List<string> Urls = new List<string>();
         }
 
+        // One place the game's full package comes from: Aethus' site, or a
+        // mirror the game's Discord gave. A mirror's file only with the size
+        // and sha256 Aethus gave for it, checked once it is down.
+        class PackageSource
+        {
+            public string Name, Url, Sha256, User, Password;
+            public long Size;                   // 0: as its server says
+            public bool Official, Ranges;       // Ranges: it takes up where a download stopped
+            public double Speed = -1;           // bytes a second, measured just before; -1: not reached
+
+            // Two sources with the same file share a download stopped halfway.
+            public string Key { get { return Sha256 ?? Url; } }
+            public bool Reached { get { return Speed > 0 && Size > 0; } }
+        }
+
+        // The mirrors, kept in the repository so one can be added or dropped
+        // without a new launcher; the ones built in when it is out of reach.
+        const string MirrorsUrl = "https://raw.githubusercontent.com/" + LauncherRepo + "/main/mirrors.json";
+        const long ProbeBytes = 2 * 1048576;
+        const int ProbeMilliseconds = 4000;
+        const double SlowSpeed = 256 * 1024;    // under it for a while: another source offered
+        // Another source taken by itself when it would end the package at
+        // least AutoFactor times sooner (by its speed when timed, from the
+        // start or, with the same file, from the same byte), for AutoSteady
+        // seconds on end; a source judged only after AutoWait seconds on it,
+        // and one with less than AutoLeft seconds to go kept.
+        const double AutoFactor = 3;
+        const int AutoWait = 10, AutoSteady = 10, AutoLeft = 60;
+
+        static List<PackageSource> BuiltInMirrors()
+        {
+            return new List<PackageSource>
+            {
+                new PackageSource
+                {
+                    Name = "Mirror by Meexa",
+                    Url = "https://azerothsurvivors-mirror.sandervspl.dev/downloads/1792925574766-14929617-e3ce-4190-8591-6e5e1a4a1c59/AzerothSurvivorsWindowsNew.rar",
+                    Size = 760497456,
+                    Sha256 = "971db7968dc37ec50b18d64a1de7f693e137f6793a7368e4d5c27bd9522eccd8",
+                },
+                // Its login as its owner gave it on the game's Discord, here with his ok.
+                new PackageSource
+                {
+                    Name = "Mirror by Leo",
+                    Url = "https://budapestmix.hu:5000/download",
+                    Size = 760497456,
+                    Sha256 = "971db7968dc37ec50b18d64a1de7f693e137f6793a7368e4d5c27bd9522eccd8",
+                    User = "AzerothSurvivors_uSZfhjS",
+                    Password = "AzerothSurvivors_uSZfhjS",
+                },
+            };
+        }
+
+        // Aethus' site first, then the mirrors: the repository's list, else
+        // the ones built in. A mirror without its size and sha256 is left out.
+        static List<PackageSource> PackageSources()
+        {
+            List<PackageSource> sources = new List<PackageSource>();
+            sources.Add(new PackageSource { Name = "wow.aethus.pl (official)", Url = GamePackage, Official = true });
+            List<PackageSource> mirrors;
+            try { mirrors = ReadMirrors(Download(MirrorsUrl)); }
+            catch { mirrors = BuiltInMirrors(); }
+            sources.AddRange(mirrors);
+            return sources;
+        }
+
+        // mirrors.json: {"package": [{"name", "url", "size", "sha256", "user"?, "password"?}, ...]}.
+        static List<PackageSource> ReadMirrors(string json)
+        {
+            List<PackageSource> mirrors = new List<PackageSource>();
+            Dictionary<string, object> data = (Dictionary<string, object>)new JavaScriptSerializer().DeserializeObject(json);
+            foreach (object item in (System.Collections.IEnumerable)data["package"])
+            {
+                Dictionary<string, object> entry = (Dictionary<string, object>)item;
+                Func<string, string> text = name => entry.ContainsKey(name) && entry[name] != null ? Convert.ToString(entry[name]) : null;
+                PackageSource mirror = new PackageSource { Name = text("name"), Url = text("url"), User = text("user"), Password = text("password") };
+                mirror.Sha256 = text("sha256") != null ? text("sha256").ToLowerInvariant() : null;
+                long size;
+                if (long.TryParse(text("size"), out size)) mirror.Size = size;
+                if (mirror.Name != null && mirror.Url != null && mirror.Sha256 != null && mirror.Size > 0) mirrors.Add(mirror);
+            }
+            return mirrors;
+        }
+
+        static HttpWebRequest PackageRequest(PackageSource source, long from)
+        {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(source.Url);
+            request.UserAgent = "SurvivorUI-Installer";
+            request.Timeout = 15000;
+            request.ReadWriteTimeout = 30000;
+            if (source.User != null)
+                request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(source.User + ":" + (source.Password ?? "")));
+            if (from > 0) request.AddRange(from);
+            return request;
+        }
+
+        // Each source's speed now, all at once: its first megabytes for a few
+        // seconds; and whether it takes up where it stopped, and its size. A
+        // page in place of the package: the package it links to (its first
+        // .rar), timed instead. A file of another size than the one listed is
+        // not the package: out.
+        static void Probe(List<PackageSource> sources)
+        {
+            List<Thread> threads = new List<Thread>();
+            foreach (PackageSource source in sources)
+            {
+                PackageSource each = source;
+                Thread thread = new Thread(delegate ()
+                {
+                    HttpWebRequest request = null;
+                    bool measured = false;
+                    try
+                    {
+                        for (int hop = 0; !measured; hop++)
+                        {
+                            request = PackageRequest(each, 0);
+                            request.AddRange(0L, ProbeBytes - 1);
+                            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                            using (Stream input = response.GetResponseStream())
+                            {
+                                if ((response.ContentType ?? "").StartsWith("text/html", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    string page;
+                                    using (StreamReader reader = new StreamReader(input)) page = reader.ReadToEnd();
+                                    Match link = Regex.Match(page, @"href\s*=\s*[""']([^""']+?\.rar)[""']", RegexOptions.IgnoreCase);
+                                    if (hop > 0 || !link.Success) throw new Exception("no package there");
+                                    each.Url = new Uri(new Uri(each.Url), WebUtility.HtmlDecode(link.Groups[1].Value)).AbsoluteUri;
+                                    continue;
+                                }
+                                each.Ranges = response.StatusCode == HttpStatusCode.PartialContent;
+                                long size = response.ContentLength;
+                                Match whole = Regex.Match(response.Headers["Content-Range"] ?? "", @"/(\d+)\s*$");
+                                if (each.Ranges && whole.Success) size = long.Parse(whole.Groups[1].Value);
+                                if (each.Size > 0 && size > 0 && size != each.Size) throw new Exception("another file");
+                                if (each.Size == 0 && size > 0) each.Size = size;
+                                Stopwatch clock = Stopwatch.StartNew();
+                                byte[] buffer = new byte[65536];
+                                long read = 0;
+                                int got;
+                                while (read < ProbeBytes && clock.ElapsedMilliseconds < ProbeMilliseconds && (got = input.Read(buffer, 0, buffer.Length)) > 0)
+                                    read += got;
+                                each.Speed = read / Math.Max(0.05, clock.Elapsed.TotalSeconds);
+                                measured = true;
+                                request.Abort();
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // The abort itself may throw as the answer closes.
+                        if (!measured) each.Speed = -1;
+                        try { if (request != null) request.Abort(); } catch { }
+                    }
+                }) { IsBackground = true };
+                threads.Add(thread);
+                thread.Start();
+            }
+            foreach (Thread thread in threads) thread.Join(ProbeMilliseconds + 20000);
+        }
+
+        static string Speed(double bytes)
+        {
+            return bytes >= 102400 ? (bytes / 1048576).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " MB/s"
+                : Math.Max(1, (int)Math.Round(bytes / 1024)) + " KB/s";
+        }
+
         // What getting the game takes: where it goes, and each piece missing.
         class GamePlan
         {
             public string Folder, Version;
+            public List<PackageSource> Sources = new List<PackageSource>();     // reached, the fastest first
+            public List<PackageSource> Known = new List<PackageSource>();       // all, reached or not
+            public PackageSource Source;        // the one picked
+            public string LocalPackage;         // or a package the player has already
             public long PackageSize;            // 0: the base data is there
             public GameFile Exe;                // null: the exe is there
             public readonly List<GameFile> Patches = new List<GameFile>();
@@ -6483,7 +6741,7 @@ namespace SurvivorInstaller
             }
             public long Download
             {
-                get { return PackageSize + (Exe != null ? Exe.Download : 0) + PatchesDownload; }
+                get { return (LocalPackage == null ? PackageSize : 0) + (Exe != null ? Exe.Download : 0) + PatchesDownload; }
             }
         }
 
@@ -6747,17 +7005,6 @@ namespace SurvivorInstaller
             return file;
         }
 
-        // The size of the site's full package, asked without taking it.
-        static long PackageSize()
-        {
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(GamePackage);
-            request.Method = "HEAD";
-            request.UserAgent = "SurvivorUI-Installer";
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-                return Math.Max(1, response.ContentLength);
-        }
-
         // What is missing in the game's folder: asked of the indexes and the site.
         static GamePlan MakePlan(string folder)
         {
@@ -6784,7 +7031,18 @@ namespace SurvivorInstaller
                 string target = Path.Combine(Path.Combine(folder, "Data"), patch.Name);
                 if (!File.Exists(target) || new FileInfo(target).Length != patch.Size) plan.Patches.Add(patch);
             }
-            if (!File.Exists(BaseData(folder))) plan.PackageSize = PackageSize();
+            if (!File.Exists(BaseData(folder)))
+            {
+                // The package's sources, each timed: the ones reached, the fastest first.
+                List<PackageSource> sources = PackageSources();
+                Probe(sources);
+                plan.Sources = sources.FindAll(source => source.Reached);
+                plan.Sources.Sort((a, b) => b.Speed.CompareTo(a.Speed));
+                plan.Known = sources;
+                if (plan.Sources.Count == 0) throw new Exception("its full package is out of reach (wow.aethus.pl and its mirrors)");
+                plan.Source = plan.Sources[0];
+                plan.PackageSize = plan.Source.Size;
+            }
             return plan;
         }
 
@@ -6847,14 +7105,47 @@ namespace SurvivorInstaller
                     if (plan.PackageSize > 0) pieces += "\n  \u2022  the game's data, from its full package: " + Megabytes(plan.PackageSize) + " MB";
                     if (plan.Exe != null) pieces += "\n  \u2022  the newest game, " + plan.Version + ": " + Megabytes(plan.Exe.Download) + " MB";
                     if (plan.Patches.Count > 0) pieces += "\n  \u2022  its newest updates: " + Megabytes(plan.PatchesDownload) + " MB";
-                    DialogResult go = Ask(this,
-                        (update ? "Update Azeroth Survivors to " + plan.Version + " (about " + Megabytes(plan.Download) + " MB)?\n\n"
+                    string words = (update ? "Update Azeroth Survivors to " + plan.Version + " (about " + Megabytes(plan.Download) + " MB)?\n\n"
                             : "Download Azeroth Survivors (about " + Megabytes(plan.Download) + " MB in all)?\n\n") +
-                        "Azeroth Survivors is Aethus' game. The launcher takes it from his own servers (wow.aethus.pl) and checks it:" +
+                        "Azeroth Survivors is Aethus' game. The launcher takes it from his own servers (wow.aethus.pl)" +
+                        (plan.PackageSize > 0 ? ", the full package also from the mirrors his Discord gave," : "") + " and checks it:" +
                         pieces + "\n\nInto: " + plan.Folder + "\nIt needs about " + Gigabytes(RoomNeeded(plan)) + " GB free while it works." +
-                        (update ? "" : " Then it installs Survivor UI."),
-                        "Azeroth Survivors", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-                    if (go != DialogResult.Yes)
+                        (update ? "" : " Then it installs Survivor UI.");
+                    if (plan.PackageSize > 0)
+                    {
+                        // Where the full package comes from: the fastest now
+                        // picked, or a package the player has already.
+                        List<string> lines = new List<string>();
+                        for (int i = 0; i < plan.Sources.Count; i++)
+                            lines.Add(plan.Sources[i].Name + ": " + Speed(plan.Sources[i].Speed) + " now" + (i == 0 && plan.Sources.Count > 1 ? ", the fastest" : ""));
+                        lines.Add("A package I downloaded already (.rar)...");
+                        int picked = Choose(words + "\n\nThe full package from:", "Azeroth Survivors", lines.ToArray(), 0);
+                        if (picked < 0)
+                        {
+                            Status("");
+                            return;
+                        }
+                        if (picked == plan.Sources.Count)
+                        {
+                            using (OpenFileDialog pick = new OpenFileDialog())
+                            {
+                                pick.Title = "The game's full package";
+                                pick.Filter = "The game's package (*.rar)|*.rar|All files|*.*";
+                                if (pick.ShowDialog(this) != DialogResult.OK)
+                                {
+                                    Status("");
+                                    return;
+                                }
+                                plan.LocalPackage = pick.FileName;
+                            }
+                        }
+                        else
+                        {
+                            plan.Source = plan.Sources[picked];
+                            plan.PackageSize = plan.Source.Size;
+                        }
+                    }
+                    else if (Ask(this, words, "Azeroth Survivors", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                     {
                         Status("");
                         return;
@@ -6885,7 +7176,231 @@ namespace SurvivorInstaller
             }
             catch { }
             if (done >= 0)
-                Status("Downloading " + what + ": " + Megabytes(done) + " of " + Megabytes(total) + " MB (" + (total > 0 ? done * 100 / total : 0) + "%)");
+                Status("Downloading " + what + ": " + Megabytes(done) + " of " + Megabytes(total) + " MB (" + (total > 0 ? done * 100 / total : 0) + "%)" + (progressTail ?? ""));
+        }
+
+        // --- The game's full package, from the source picked -----------------
+
+        const string PackageName = "AzerothSurvivors.rar";
+        string progressTail;                    // after the progress: the package's speed
+        volatile bool packageSwitch;            // Try another source clicked
+        bool packageSwitchable;                 // the package downloading, another source there
+        HttpWebRequest packageRequest;          // the one downloading, stopped by that click
+
+        // Try another source: the download now stops and the next source goes on.
+        void SwitchPackageSource()
+        {
+            packageSwitch = true;
+            Status("Trying another source...");
+            HttpWebRequest request = packageRequest;
+            if (request != null) try { request.Abort(); } catch { }
+        }
+
+        // The staging folder emptied but for a download stopped halfway on a
+        // source that takes it up again (its .part and the note of whose file).
+        static void ClearStaging(string staging, string package)
+        {
+            Directory.CreateDirectory(staging);
+            string part = package + ".part", from = package + ".from";
+            bool keep = File.Exists(part) && File.Exists(from);
+            foreach (string folder in Directory.GetDirectories(staging)) Directory.Delete(folder, true);
+            foreach (string file in Directory.GetFiles(staging))
+                if (!keep || !(string.Equals(file, part, StringComparison.OrdinalIgnoreCase) || string.Equals(file, from, StringComparison.OrdinalIgnoreCase)))
+                    File.Delete(file);
+        }
+
+        static string Sha256Of(string path)
+        {
+            using (FileStream input = File.OpenRead(path))
+            using (System.Security.Cryptography.SHA256 hash = System.Security.Cryptography.SHA256.Create())
+                return BitConverter.ToString(hash.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
+        }
+
+        // A package the player has already: a mirror's (by its sha256) or the
+        // size of the site's; else used only when the player says so.
+        void CheckLocalPackage(GamePlan plan)
+        {
+            Status("Checking the package picked (sha256)...");
+            string sha = Sha256Of(plan.LocalPackage);
+            long size = new FileInfo(plan.LocalPackage).Length;
+            foreach (PackageSource source in plan.Known)
+                if (sha == source.Sha256 || (source.Official && size == source.Size)) return;
+            if (Ask(this, "The package picked is not one the launcher knows: not the size of wow.aethus.pl's, nor a mirror's by its sha256.\n\n" +
+                    plan.LocalPackage + "\n\nUse it anyway?", "Azeroth Survivors", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                throw new Exception("the package picked was not used");
+        }
+
+        // The full package into a .part beside it, from the source picked: a
+        // break taken up where it stopped, on a source that can; a source
+        // failing, or Try another source, goes on with the next. Down, its
+        // size and sha256 checked. The bytes done after it come back; the
+        // whole download's size follows the source's.
+        long FetchPackage(GamePlan plan, string package, long done, ref long total)
+        {
+            string part = package + ".part", from = package + ".from";
+            List<PackageSource> order = new List<PackageSource>(plan.Sources);
+            order.Remove(plan.Source);
+            order.Insert(0, plan.Source);
+            int index = 0, breaks = 0;
+            string problem = null;
+            // The sources left for being slow: not taken by themselves again.
+            List<PackageSource> slow = new List<PackageSource>();
+            packageSwitchable = order.Count > 1;
+            BeginInvoke(new Action(ShowUpdateState));
+            try
+            {
+                while (order.Count > 0)
+                {
+                    PackageSource source = order[index % order.Count];
+                    total += source.Size - plan.PackageSize;
+                    plan.PackageSize = source.Size;
+                    long have = 0;
+                    if (source.Ranges && File.Exists(part) && File.Exists(from) && File.ReadAllText(from) == source.Key)
+                        have = Math.Min(new FileInfo(part).Length, source.Size);
+                    if (have == 0 && File.Exists(part)) File.Delete(part);
+                    // The note only for a source that takes a download up again.
+                    if (source.Ranges) File.WriteAllText(from, source.Key);
+                    else if (File.Exists(from)) File.Delete(from);
+                    packageSwitch = false;
+                    problem = null;
+                    PackageSource quicker = null;
+                    List<PackageSource> others = order.FindAll(other => other != source && !slow.Contains(other));
+                    try { if (have < source.Size) FetchFrom(source, part, have, done, total, others, out quicker); }
+                    catch (Exception error) { problem = error.Message; }
+                    if (quicker != null)
+                    {
+                        slow.Add(source);
+                        Status(source.Name + " is slow: going on with " + quicker.Name + " (" + Speed(quicker.Speed) + " when timed)...");
+                        index = order.IndexOf(quicker);
+                        breaks = 0;
+                        continue;
+                    }
+                    if (packageSwitch)
+                    {
+                        index = (index + 1) % order.Count;
+                        breaks = 0;
+                        continue;
+                    }
+                    if (problem == null)
+                    {
+                        if (source.Sha256 != null) Status("Checking the game's package (sha256)...");
+                        if (new FileInfo(part).Length == source.Size && (source.Sha256 == null || Sha256Of(part) == source.Sha256))
+                        {
+                            if (File.Exists(package)) File.Delete(package);
+                            File.Move(part, package);
+                            if (File.Exists(from)) File.Delete(from);
+                            return done + source.Size;
+                        }
+                        problem = source.Name + "'s package is not the game's (its size or sha256 does not match)";
+                        File.Delete(part);
+                    }
+                    else if (source.Ranges && ++breaks <= 5)
+                    {
+                        // A break: the same source again, from where it stopped.
+                        Status("The download broke (" + problem + "): going on in a moment...");
+                        Thread.Sleep(3000);
+                        if (packageSwitch)
+                        {
+                            index = (index + 1) % order.Count;
+                            breaks = 0;
+                        }
+                        continue;
+                    }
+                    // This source is done with: the next one, from its start.
+                    order.Remove(source);
+                    breaks = 0;
+                    if (order.Count > 0)
+                    {
+                        index = index % order.Count;
+                        packageSwitchable = order.Count > 1;
+                        BeginInvoke(new Action(ShowUpdateState));
+                        Status(source.Name + " failed (" + problem + "): " + order[index].Name + " next...");
+                        Thread.Sleep(1500);
+                    }
+                }
+                throw new Exception("the game's package could not be downloaded (" + problem + ")");
+            }
+            finally
+            {
+                progressTail = null;
+                packageSwitchable = false;
+                packageRequest = null;
+                BeginInvoke(new Action(ShowUpdateState));
+            }
+        }
+
+        // One source's package into the .part, from the byte it holds already;
+        // its speed shown each second, and when slow for a while, another
+        // source offered. Try another source stops it at once; so does one of
+        // the others that would end it AutoFactor times sooner (quicker).
+        void FetchFrom(PackageSource source, string part, long have, long done, long total, List<PackageSource> others, out PackageSource quicker)
+        {
+            quicker = null;
+            HttpWebRequest request = PackageRequest(source, have);
+            packageRequest = request;
+            if (packageSwitch) return;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            using (Stream input = response.GetResponseStream())
+            {
+                // A server that sends it whole again: from the start.
+                if (have > 0 && response.StatusCode != HttpStatusCode.PartialContent)
+                {
+                    have = 0;
+                    source.Ranges = false;
+                }
+                using (FileStream output = new FileStream(part, have > 0 ? FileMode.Append : FileMode.Create))
+                {
+                    string what = "the game's data from " + source.Name;
+                    byte[] buffer = new byte[81920];
+                    Stopwatch clock = Stopwatch.StartNew();
+                    long got = have, before = have;
+                    double then = 0, speed = -1, slowSince = -1, quickerSince = -1;
+                    int read;
+                    while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        output.Write(buffer, 0, read);
+                        got += read;
+                        if (packageSwitch)
+                        {
+                            request.Abort();
+                            return;
+                        }
+                        double now = clock.Elapsed.TotalSeconds;
+                        if (now - then < 1) continue;
+                        // Each second: the speed (smoothed), and whether it stays slow.
+                        double last = (got - before) / (now - then);
+                        speed = speed < 0 ? last : speed * 0.7 + last * 0.3;
+                        before = got;
+                        then = now;
+                        if (speed >= SlowSpeed) slowSince = -1;
+                        else if (slowSince < 0) slowSince = now;
+                        bool slow = packageSwitchable && slowSince >= 0 && now - slowSince >= 15;
+                        progressTail = ", " + Speed(speed) + (slow ? ". Slow: click Try another source" : "");
+                        GameProgress(done + got, total, what);
+                        // Another source that would end it far sooner, for a while: taken.
+                        PackageSource best = null;
+                        double left = (source.Size - got) / Math.Max(1, speed), bestLeft = double.MaxValue;
+                        foreach (PackageSource other in others)
+                        {
+                            long rest = other.Key == source.Key && other.Ranges ? other.Size - got : other.Size;
+                            double time = rest / Math.Max(1, other.Speed);
+                            if (time < bestLeft) { best = other; bestLeft = time; }
+                        }
+                        if (now >= AutoWait && left > AutoLeft && best != null && bestLeft * AutoFactor < left)
+                        {
+                            if (quickerSince < 0) quickerSince = now;
+                            else if (now - quickerSince >= AutoSteady)
+                            {
+                                quicker = best;
+                                request.Abort();
+                                return;
+                            }
+                        }
+                        else quickerSince = -1;
+                    }
+                    if (got < source.Size) throw new IOException("it stopped at " + Megabytes(got) + " MB");
+                }
+            }
         }
 
         // One download into a file, its progress told along the whole; the
@@ -6981,14 +7496,17 @@ namespace SurvivorInstaller
                         " GB free, about " + Gigabytes(RoomNeeded(plan)) + " GB needed");
                 if (plan.PackageSize > 0)
                 {
-                    if (Directory.Exists(staging)) Directory.Delete(staging, true);
-                    Directory.CreateDirectory(staging);
-                    string package = Path.Combine(staging, "AzerothSurvivors.rar");
-                    using (FileStream output = File.Create(package))
-                        done = Fetch(GamePackage, output, done, total, "the game's data");
+                    string package = Path.Combine(staging, PackageName);
+                    ClearStaging(staging, package);
+                    if (plan.LocalPackage != null)
+                    {
+                        CheckLocalPackage(plan);
+                        package = plan.LocalPackage;
+                    }
+                    else done = FetchPackage(plan, package, done, ref total);
                     Status("Unpacking the game's data (a minute or two)...");
                     Unpack(package, staging);
-                    File.Delete(package);
+                    if (plan.LocalPackage == null) File.Delete(package);
                     string[] found = Directory.GetFiles(staging, "patch.MPQ", SearchOption.AllDirectories);
                     if (found.Length == 0) throw new Exception("the game's package holds no Data\\patch.MPQ");
                     foreach (string file in Directory.GetFiles(Path.GetDirectoryName(found[0]), "*.MPQ"))
@@ -7034,12 +7552,25 @@ namespace SurvivorInstaller
             }
             catch (Exception error)
             {
-                try { if (Directory.Exists(staging)) Directory.Delete(staging, true); } catch { }
+                // A download stopped halfway on a source that can take it up
+                // again is kept for the next try; the rest goes.
+                bool kept = false;
+                try
+                {
+                    if (Directory.Exists(staging))
+                    {
+                        ClearStaging(staging, Path.Combine(staging, PackageName));
+                        kept = File.Exists(Path.Combine(staging, PackageName + ".part"));
+                        if (!kept) Directory.Delete(staging, true);
+                    }
+                }
+                catch { }
+                string more = kept ? " Click Get the game again: it goes on from where it stopped." : "";
                 BeginInvoke(new Action(delegate
                 {
                     GameProgress(-1, 0, null);
-                    Status("Could not get the game: " + error.Message);
-                    Ask(this, "Could not get the game:\n\n" + error.Message + ".", "Azeroth Survivors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    Status("Could not get the game: " + error.Message + "." + more);
+                    Ask(this, "Could not get the game:\n\n" + error.Message + "." + (kept ? "\n\n" + more.Trim() : ""), "Azeroth Survivors", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }));
             }
             finally

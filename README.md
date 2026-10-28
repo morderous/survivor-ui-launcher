@@ -17,6 +17,23 @@ It updates itself from this repository's releases: leave "Update the launcher by
 
 `build.bat` builds `SurvivorInstaller.exe` with the C# compiler that comes with Windows (.NET Framework 4.8). Nothing to download.
 
+## Mirrors
+
+`mirrors.json` lists the mirrors Get the game offers beside Aethus' own servers (name, url, size, sha256, and a login where one is asked). The launcher reads it from this repository as it gets the game, so a mirror is added or changed here without a new launcher; it uses the ones built in when the file is out of reach. A mirror's package is taken only with the size and sha256 Aethus gave.
+
+## Changes
+
+### 1.5.8, 2026-10-28
+
+- **Get the game from the mirrors too**: the game's package also comes from the mirrors the game's Discord gave (thanks to Meexa and Leo), beside Aethus' own servers. Each is timed first and offered in a list with its speed, the fastest picked; or a package you downloaded already (.rar).
+- **Checked before it is used**: a mirror's package only with the size and sha256 Aethus gave.
+- **A broken download goes on where it stopped**, on a source that allows it, up to five breaks.
+- **Try another source**: while it downloads, the Play button goes on with the next source; and a source that would finish three times later than another, for ten seconds in a row, is left for it by itself.
+
+### 1.5.7, 2026-10-28
+
+- Updates itself from this repository's releases. Survivor UI's updates still come from morderous/survivor-ui. Nothing else changes from 1.5.6.
+
 ## What it touches
 
 Only the SurvivorUI and SurvivorPlates folders inside the game's AddOns folder and the game's list of addons. It also touches your folders when you ask it to move them, the game's own files when it gets or updates the game for you, and your save and settings when you ask it to back them up or restore one. It reads your save and Survivor UI's settings for Statistics and Run History, and never writes them. Its own settings are in `%APPDATA%\SurvivorUIInstaller`.
