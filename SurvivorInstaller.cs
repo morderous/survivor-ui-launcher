@@ -53,8 +53,16 @@
 //     GitHub; a newer one out, Play turns to "Update game", which takes the
 //     newest exe and data patches the same way, checked (the game would also
 //     update itself as it starts), and the tray tells of it once;
-//   - in five tabs: Play, Survivor UI, Savegame, Statistics, Run History;
-//   - each addon on or off for the game (Survivor UI tab), in the game's own
+//   - in five tabs: Play, Savegame, Statistics, Run History, Addons (the
+//     Survivor UI tab folded into Addons in 1.6.0);
+//   - gets more addons (Addons tab, 1.6.0): the ones morderous checked,
+//     listed in the launcher's repository (addons.json), each from its
+//     author's own latest release, checked by the sha256 the author gives;
+//     only an addon's own folder and its kinds of files, never a program,
+//     never over Survivor UI's folders; and the ones put in by hand: each
+//     installed, updated (one, or all at once), on or off, or sent to the
+//     Recycle Bin;
+//   - each addon on or off for the game (Addons tab), in the game's own
 //     list (AddOns\account.txt): nothing deleted, so the launcher serves a
 //     player without the addons too;
 //   - keeps the game's save (Savegame tab): "Back up now" zips the heroes,
@@ -98,7 +106,7 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Azeroth SurvivorUI Launcher")]
 [assembly: System.Reflection.AssemblyProduct("Survivor UI")]
-[assembly: System.Reflection.AssemblyVersion("1.5.8.0")]
+[assembly: System.Reflection.AssemblyVersion("1.6.0.0")]
 
 namespace SurvivorInstaller
 {
@@ -164,6 +172,38 @@ namespace SurvivorInstaller
 
         [DllImport("user32.dll")]
         public static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref ScrollInfo info);
+
+        // A folder to the Recycle Bin (the Addons tab): the shell's own delete.
+        // Its struct is packed on 32-bit Windows only, hence two.
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct FileOp64
+        {
+            public IntPtr hwnd;
+            public uint wFunc;
+            public string pFrom, pTo;
+            public ushort fFlags;
+            public int fAnyOperationsAborted;
+            public IntPtr hNameMappings;
+            public string lpszProgressTitle;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 1)]
+        public struct FileOp32
+        {
+            public IntPtr hwnd;
+            public uint wFunc;
+            public string pFrom, pTo;
+            public ushort fFlags;
+            public int fAnyOperationsAborted;
+            public IntPtr hNameMappings;
+            public string lpszProgressTitle;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, EntryPoint = "SHFileOperationW")]
+        public static extern int FileOperation64(ref FileOp64 op);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, EntryPoint = "SHFileOperationW")]
+        public static extern int FileOperation32(ref FileOp32 op);
 
         // The game started with its output into a file (StartWithLog).
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -427,9 +467,7 @@ namespace SurvivorInstaller
         // every tab:
         //   Play         the game: its version, Find game, Play (Get the game,
         //                Update game), the player's numbers, the game's news,
-        //                the launcher's own ticks;
-        //   Survivor UI  the addons: each on or off, the AddOns folder,
-        //                install, the beta, what's new, the links;
+        //                its AddOns folder, the launcher's own ticks;
         //   Savegame     the save: backed up to the Desktop, a USB drive or a
         //                folder, put back, backed up by itself after each
         //                session, the backups made;
@@ -438,8 +476,15 @@ namespace SurvivorInstaller
         //                the newest achievements, each class's zones beaten
         //                and talent points, the collection;
         //   Run History  Survivor UI's runs, read from its saved settings: a
-        //                list to filter, and the one picked in detail.
-        static readonly string[] TabNames = { "Play", "Survivor UI", "Savegame", "Statistics", "Run History" };
+        //                list to filter, and the one picked in detail;
+        //   Addons       the addons: Survivor UI and Survivor Plates first,
+        //                recommended (the release, the beta, what's new),
+        //                then the list's, installed from their authors'
+        //                releases, and the ones put in by hand; each on or off.
+        static readonly string[] TabNames = { "Play", "Savegame", "Statistics", "Run History", "Addons" };
+        const int PlayTab = 0, SaveTab = 1, StatsTab = 2, RunsTab = 3, AddonsTab = 4;
+        // The tabs before 1.6.0, for the one kept open then (by its number).
+        static readonly string[] OldTabNames = { "Play", "Survivor UI", "Savegame", "Statistics", "Run History", "Addons" };
         const int PageTop = 124, PageHeight = 432;
         readonly List<Panel> pages = new List<Panel>();
         readonly List<Button> tabButtons = new List<Button>();
@@ -715,10 +760,10 @@ namespace SurvivorInstaller
             SkinTabs();
 
             BuildPlayPage(NewPage());
-            BuildAddonPage(NewPage());
             BuildSavePage(NewPage());
             BuildStatsPage(NewPage());
             BuildRunsPage(NewPage());
+            BuildAddonsPage(NewPage());
 
             statusLabel.Location = new Point(20, 562);
             statusLabel.BackColor = Color.Transparent;
@@ -728,12 +773,12 @@ namespace SurvivorInstaller
 
             // Whose game it is, at the bottom left; his site in the other corner.
             Label credit = new Label();
-            credit.Text = "Azeroth Survivors is a game by Aethus";
+            credit.Text = "Azeroth Survivors by Aethus  \u00B7  Launcher by morderous";
             credit.Font = new Font("Segoe UI", 8f);
             credit.AutoSize = false;
             credit.Location = new Point(20, 584);
             credit.BackColor = Color.Transparent;
-            credit.Size = new Size(320, 18);
+            credit.Size = new Size(330, 18);
             credit.ForeColor = Muted;
             credit.TextAlign = ContentAlignment.MiddleLeft;
             Controls.Add(credit);
@@ -755,8 +800,24 @@ namespace SurvivorInstaller
             };
             Controls.Add(creditLink);
 
-            int lastTab;
-            ShowTab(int.TryParse(Setting("tab", "0"), out lastTab) && lastTab >= 0 && lastTab < TabNames.Length ? lastTab : 0);
+            // The launcher's own channel on the game's Discord, for what players
+            // make of it: under every tab, between the credits.
+            LinkLabel feedback = new LinkLabel();
+            feedback.Text = "Feedback on Discord";
+            feedback.Font = new Font("Segoe UI", 8f);
+            feedback.AutoSize = false;
+            feedback.Location = new Point(370, 584);
+            feedback.BackColor = Color.Transparent;
+            feedback.Size = new Size(180, 18);
+            feedback.TextAlign = ContentAlignment.MiddleCenter;
+            feedback.LinkColor = Gold;
+            feedback.ActiveLinkColor = Color.White;
+            feedback.VisitedLinkColor = Gold;
+            feedback.LinkBehavior = LinkBehavior.HoverUnderline;
+            feedback.LinkClicked += delegate { Open(FeedbackUrl); };
+            Controls.Add(feedback);
+
+            ShowTab(SavedTab());
             WatchGame();
 
             SetUpTray();
@@ -780,7 +841,7 @@ namespace SurvivorInstaller
             SkinTips(tips);
             SkinTips(folderTip);
             BuildAlert();
-            foreach (Control scrolled in new Control[] { gameNews, notesBox, backupList, runList })
+            foreach (Control scrolled in new Control[] { gameNews, backupList, runList, addonList })
                 new ArtScroll(this, scrolled);
             ShowTab(currentTab, true);
 
@@ -1506,9 +1567,9 @@ namespace SurvivorInstaller
         // drop-downs and the folder's field in its card rim.
         void SkinPages()
         {
-            foreach (Button button in new Button[] { gameCheckButton, browseButton, foldersButton, betaButton, restoreButton })
+            foreach (Button button in new Button[] { gameCheckButton, browseButton, foldersButton, betaButton, restoreButton, addonRemove })
                 Wear(button, "stone");
-            foreach (Control control in new Control[] { gameNews, notesBox, backupList, runList, runDetail, playChart, achList, classGrid })
+            foreach (Control control in new Control[] { gameNews, notesBox, backupList, runList, runDetail, playChart, achList, classGrid, addonList })
                 Frame(control, "inset");
             Frame(folderBox, "card");
             foreach (ComboBox box in new ComboBox[] { destBox, keepBox, runClass, runResult, graphicsBox })
@@ -1978,9 +2039,12 @@ namespace SurvivorInstaller
             if (selfRelease != null && !selfUpdating)
                 waiting.Add(new KeyValuePair<string, Action>("Launcher " + Short(selfRelease.InstallerVersion), delegate { UpdateSelf(); }));
             if (updateWaiting && latest != null)
-                waiting.Add(new KeyValuePair<string, Action>("Survivor UI " + latest.Tag, delegate { ShowTab(1); }));
+                waiting.Add(new KeyValuePair<string, Action>("Survivor UI " + latest.Tag, delegate { ShowTab(AddonsTab); PickAddon(OurUI); }));
             if (!GameMissing() && GameBehind() && game != null)
                 waiting.Add(new KeyValuePair<string, Action>("Game " + game.Latest, delegate { ShowTab(0); }));
+            // An addon installed from the list, with a newer release out.
+            foreach (ListedAddon addon in Updatable(folderBox.Text.Trim()))
+                waiting.Add(new KeyValuePair<string, Action>(addon.Name + " " + ShortVersion(addon), delegate { ShowTab(AddonsTab); }));
             return waiting;
         }
 
@@ -2080,7 +2144,8 @@ namespace SurvivorInstaller
                     int index = tabButtons.IndexOf(self);
                     bool waits = false;
                     foreach (KeyValuePair<string, Action> alert in alerts)
-                        waits = waits || (index == 1 && alert.Key.StartsWith("Survivor UI")) || (index == 0 && alert.Key.StartsWith("Game"));
+                        waits = waits || (index == AddonsTab && !alert.Key.StartsWith("Launcher") && !alert.Key.StartsWith("Game"))
+                            || (index == PlayTab && alert.Key.StartsWith("Game"));
                     if (waits)
                     {
                         int dot = S(8);
@@ -2114,6 +2179,17 @@ namespace SurvivorInstaller
 
         // A tab opened: its page shown, its name gold over the gold line; the
         // one open kept for the next start.
+        // The tab kept open: by its name; one kept by its number before 1.6.0
+        // by the tabs of then, Survivor UI's being Addons now.
+        int SavedTab()
+        {
+            string name = Setting("tabName", null);
+            int old;
+            if (name == null && int.TryParse(Setting("tab", "0"), out old) && old >= 0 && old < OldTabNames.Length)
+                name = old == 1 ? "Addons" : OldTabNames[old];
+            return Math.Max(0, Array.IndexOf(TabNames, name ?? "Play"));
+        }
+
         internal void ShowTab(int index)
         {
             ShowTab(index, false);
@@ -2132,10 +2208,11 @@ namespace SurvivorInstaller
             Button tab = tabButtons[index];
             tabMark.Location = new Point(tab.Left + S(10), tab.Bottom - S(2));
             tabMark.Size = new Size(tab.Width - S(20), S(3));
-            SetSetting("tab", index.ToString());
-            if (index == 2) ShowSaveTab();
-            if (index == 3) ShowStats();
-            if (index == 4) ShowRuns();
+            SetSetting("tabName", TabNames[index]);
+            if (index == SaveTab) ShowSaveTab();
+            if (index == StatsTab) ShowStats();
+            if (index == RunsTab) ShowRuns();
+            if (index == AddonsTab) ShowAddonsTab();
         }
 
         static Label Caption(Control parent, string text, int x, int y)
@@ -2330,7 +2407,7 @@ namespace SurvivorInstaller
             // The game's own news: Aethus' notes for its newest version.
             Section(page, "Game news", 20, 124, 720);
             gameNews.Location = new Point(20, 144);
-            gameNews.Size = new Size(720, 202);
+            gameNews.Size = new Size(720, 146);
             gameNews.Multiline = true;
             gameNews.ReadOnly = true;
             gameNews.ScrollBars = ScrollBars.Vertical;
@@ -2339,6 +2416,7 @@ namespace SurvivorInstaller
             gameNews.BorderStyle = BorderStyle.FixedSingle;
             gameNews.Text = "Asking wow.aethus.pl for the game's news...";
             page.Controls.Add(gameNews);
+            BuildFolderRow(page, 300);
 
             // The launcher's own ticks: with Windows, in the tray; its updates.
             startBox.Text = "Start with Windows, in the tray";
@@ -2441,44 +2519,27 @@ namespace SurvivorInstaller
         readonly CheckBox platesUse = new CheckBox();
         bool showingSwitches;
         const string GameDiscord = "https://discord.gg/azerothsurvivors";
+        const string FeedbackUrl = "https://discord.com/channels/1557821819032051852/1564404266699984966";
         const string AddonThread = "https://discord.com/channels/1557821819032051852/1558188535058796664/threads/1559383648036327444";
 
-        void BuildAddonPage(Panel page)
+        // The game's AddOns folder, on the Play tab from 1.6.0 (the Survivor UI
+        // tab before): the folder, Open folder, and the button that moves the
+        // player's things into the game's own folder when they are in another.
+        void BuildFolderRow(Panel page, int y)
         {
-            // Each addon on or off for the game, in its own list of addons
-            // (AddOns\account.txt): nothing deleted, back on with a tick.
-            uiUse.Text = "Survivor UI on";
-            platesUse.Text = "Survivor Plates on";
-            int x = 20;
-            foreach (CheckBox box in new CheckBox[] { uiUse, platesUse })
-            {
-                box.AutoSize = true;
-                box.Location = new Point(x, 12);
-                box.FlatStyle = FlatStyle.Flat;
-                box.FlatAppearance.BorderColor = TickEdge;
-                box.Cursor = Cursors.Hand;
-                page.Controls.Add(box);
-                TickLook(box);
-                x += 180;
-            }
-            uiUse.CheckedChanged += delegate { SwitchAddon("SurvivorUI", uiUse); };
-            platesUse.CheckedChanged += delegate { SwitchAddon("SurvivorPlates", platesUse); };
-            Label switchNote = Caption(page, "Off, the game skips it from its next start; nothing is deleted.", 380, 15);
-            switchNote.Font = new Font("Segoe UI", 8f);
-
-            Section(page, "Game's AddOns folder", 20, 46, 720);
-            folderBox.Location = new Point(20, 66);
-            folderBox.Size = new Size(620, 24);
+            Section(page, "Game's AddOns folder", 20, y, 720);
+            folderBox.Location = new Point(20, y + 20);
+            folderBox.Size = new Size(372, 24);
             folderBox.BackColor = Panel;
             folderBox.ForeColor = TextColor;
             folderBox.BorderStyle = BorderStyle.FixedSingle;
-            folderBox.TextChanged += delegate { ShowInstalled(); ShowSwitches(); };
+            folderBox.TextChanged += delegate { ShowInstalled(); ShowSwitches(); if (currentTab == AddonsTab) FillAddons(); };
             page.Controls.Add(folderBox);
 
             openLink.Text = "Open folder";
             openLink.AutoSize = false;
-            openLink.Location = new Point(648, 69);
-            openLink.Size = new Size(92, 18);
+            openLink.Location = new Point(396, y + 23);
+            openLink.Size = new Size(84, 18);
             openLink.TextAlign = ContentAlignment.MiddleCenter;
             openLink.LinkColor = Gold;
             openLink.ActiveLinkColor = Color.White;
@@ -2494,96 +2555,17 @@ namespace SurvivorInstaller
             // Which folder the game keeps its things in, and the player's moved
             // there when they are in another (NoteFolders paints it).
             foldersButton.Text = "⇄  Check folder and move if necessary";
-            foldersButton.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            foldersButton.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
             foldersButton.FlatStyle = FlatStyle.Flat;
             foldersButton.Cursor = Cursors.Hand;
-            foldersButton.Location = new Point(20, 98);
-            foldersButton.Size = new Size(720, 26);
+            foldersButton.Location = new Point(486, y + 19);
+            foldersButton.Size = new Size(254, 26);
             foldersButton.Click += delegate { CheckFolders(); };
             folderTip.AutoPopDelay = 30000;
             folderTip.InitialDelay = 300;
             page.Controls.Add(foldersButton);
             Forge(foldersButton);
 
-            // The release: large and gold, its version on it; the badge in its
-            // place while it is the one installed.
-            installButton.Text = "Install";
-            installButton.FlatStyle = FlatStyle.Flat;
-            installButton.FlatAppearance.BorderColor = Color.FromArgb(255, 226, 120);
-            installButton.BackColor = StableFill;
-            installButton.ForeColor = StableText;
-            installButton.Cursor = Cursors.Hand;
-            installButton.Location = new Point(20, 136);
-            installButton.Size = new Size(350, 40);
-            installButton.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
-            Active(installButton, false, StableText);
-            installButton.Click += delegate { if (IsActive(installButton) && stable != null) Install(stable); };
-            page.Controls.Add(installButton);
-            Forge(installButton);
-
-            upToDate.Location = installButton.Location;
-            upToDate.Size = installButton.Size;
-            upToDate.TextAlign = ContentAlignment.MiddleCenter;
-            upToDate.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
-            upToDate.ForeColor = Color.FromArgb(110, 225, 125);
-            upToDate.BackColor = Color.FromArgb(22, 44, 28);
-            upToDate.BorderStyle = BorderStyle.FixedSingle;
-            upToDate.Visible = false;
-            upToDate.BorderStyle = BorderStyle.None;
-            upToDate.BackColor = Back;
-            upToDate.Paint += delegate (object sender, PaintEventArgs e)
-            {
-                Graphics g = e.Graphics;
-                Rectangle r = upToDate.ClientRectangle;
-                g.Clear(Back);
-                Rectangle bar = new Rectangle(r.X, r.Y + (r.Height - S(32)) / 2, r.Width, S(32));
-                Slice3(g, Art("bar-back"), Rectangle.Inflate(bar, -S(3), -S(3)), 8, 8);
-                Slice3(g, Art("bar-green"), Rectangle.Inflate(bar, -S(4), -S(4)), 6, 6);
-                Slice3(g, Art("bar-border"), bar, 14, 14);
-                TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
-                Rectangle shadow = bar;
-                shadow.Offset(1, 1);
-                TextRenderer.DrawText(g, upToDate.Text, upToDate.Font, shadow, Color.FromArgb(8, 20, 4), flags);
-                TextRenderer.DrawText(g, upToDate.Text, upToDate.Font, bar, Color.FromArgb(244, 255, 232), flags);
-            };
-            page.Controls.Add(upToDate);
-
-            // The beta: lavender, its version on it; a warning first.
-            betaButton.Text = "No beta right now";
-            betaButton.FlatStyle = FlatStyle.Flat;
-            betaButton.FlatAppearance.BorderColor = Color.FromArgb(112, 86, 176);
-            betaButton.BackColor = Color.FromArgb(34, 26, 58);
-            betaButton.ForeColor = BetaColor;
-            betaButton.Cursor = Cursors.Hand;
-            betaButton.Location = new Point(390, 140);
-            betaButton.Size = new Size(350, 32);
-            betaButton.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
-            Active(betaButton, false, BetaColor);
-            betaButton.Click += delegate { if (IsActive(betaButton)) InstallBeta(); };
-            page.Controls.Add(betaButton);
-            Forge(betaButton);
-            Label betaNote = Caption(page, "Betas come before a release: more bugs, more updates.", 390, 177);
-            betaNote.Font = new Font("Segoe UI", 8f);
-
-            Section(page, "What's new", 20, 196, 590);
-            LinkLabel readLink = Link(page, "Read larger", 620, 196, ShowNotesWindow);
-            readLink.AutoSize = false;
-            readLink.Size = new Size(120, 18);
-            readLink.TextAlign = ContentAlignment.MiddleRight;
-
-            notesBox.Location = new Point(20, 216);
-            notesBox.Size = new Size(720, 168);
-            notesBox.Multiline = true;
-            notesBox.ReadOnly = true;
-            notesBox.ScrollBars = ScrollBars.Vertical;
-            notesBox.BackColor = Panel;
-            notesBox.ForeColor = TextColor;
-            notesBox.BorderStyle = BorderStyle.FixedSingle;
-            notesBox.Text = "Asking GitHub for the latest release...";
-            page.Controls.Add(notesBox);
-
-            Link(page, "Survivor UI on GitHub", 20, 396, delegate { Open("https://github.com/" + Repo); });
-            Link(page, "Its thread on the game's Discord", 200, 396, delegate { Open(AddonThread); });
         }
 
         // The game's list of addons on or off: AddOns\account.txt, a line
@@ -2680,6 +2662,830 @@ namespace SurvivorInstaller
         {
             public string Name, Folder;
             public override string ToString() { return Name; }
+        }
+
+        // --- More addons (the Addons tab) ------------------------------------------
+
+        // Other addons for the game: the ones morderous checked, listed in the
+        // launcher's repository (addons.json, the ones built in when it is out
+        // of reach), each from its author's own latest release (or one pinned
+        // there), taken only with the sha256 the author gives beside it; and
+        // the ones put in the AddOns folder by hand. Each switched on or off in
+        // the game's list of addons (account.txt), installed, updated, or sent
+        // to the Recycle Bin. Only an addon's own folder comes in, and only an
+        // addon's kinds of files: never a program (the auto-updaters some
+        // authors give, a .dll to lay beside the game, stay out). Never over
+        // Survivor UI's folders.
+        const string AddonsUrl = "https://raw.githubusercontent.com/" + LauncherRepo + "/main/addons.json";
+        static readonly string[] AddonFileKinds = { ".lua", ".xml", ".toc", ".tga", ".blp", ".ttf", ".otf", ".mp3", ".ogg", ".wav", ".txt", ".md" };
+        static readonly Color InstalledColor = Color.FromArgb(90, 220, 110);
+        static readonly Color OutdatedColor = Color.FromArgb(240, 96, 84);
+        Font addonSmall;
+
+        // Survivor UI and Survivor Plates: the first rows, recommended; they
+        // come in one zip, from Survivor UI's own releases (Install, the beta).
+        internal class OurAddon
+        {
+            public string Folder, Name, About;
+        }
+
+        static readonly OurAddon OurUI = new OurAddon { Folder = "SurvivorUI", Name = "Survivor UI",
+            About = "The run tracker, the build list with its jewelry, the damage meter, Biggest Crits, Run History and more; with Survivor Plates." };
+        static readonly OurAddon OurPlates = new OurAddon { Folder = "SurvivorPlates", Name = "Survivor Plates",
+            About = "Nameplates for the enemies, your pets and totems and your co-op friends, each kind as you choose; it comes with Survivor UI." };
+
+        internal class ListedAddon
+        {
+            // From the list: its name, author, repository, the release's zip and
+            // the author's sha256 list (its asset names), its folders, a few
+            // words; Tag a release pinned, else the latest.
+            public string Name, Author, Repo, Asset, Sums, About, Tag;
+            public string[] Folders;
+            // From its release, once asked: its tag and name, the zip's url,
+            // size and sha256; or why it could not be asked.
+            public string ReleaseTag, ReleaseName, ZipName, ZipUrl, Sha256, Problem;
+            public long ZipSize;
+        }
+
+        readonly ListView addonList = new ListView();
+        readonly Label addonAbout = new Label();
+        readonly Button addonInstall = new Button();
+        readonly Button addonRemove = new Button();
+        readonly Button addonUpdateAll = new Button();
+        readonly CheckBox addonUse = new CheckBox();
+        LinkLabel addonPage;
+        List<ListedAddon> listedAddons = new List<ListedAddon>();
+        DateTime addonsAsked = DateTime.MinValue;
+        bool addonsAsking, addonBusy, showingAddon;
+
+        void BuildAddonsPage(Panel page)
+        {
+            Section(page, "Addons", 20, 10, 720);
+            Label note = Caption(page, "Survivor UI first, recommended; then addons morderous checked, and the ones put in by hand.", 20, 32);
+            note.Font = new Font("Segoe UI", 8f);
+
+            // The list ones first, the ones put in by hand under them; one picked
+            // is shown under the list, its buttons under that.
+            addonList.View = View.Details;
+            addonList.FullRowSelect = true;
+            addonList.MultiSelect = false;
+            addonList.HideSelection = false;
+            addonList.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+            addonList.BackColor = Panel;
+            addonList.ForeColor = TextColor;
+            addonList.BorderStyle = BorderStyle.FixedSingle;
+            addonList.Location = new Point(20, 56);
+            addonList.Size = new Size(720, 236);
+            addonList.Columns.Add("Addon", 180);
+            addonList.Columns.Add("By", 150);
+            addonList.Columns.Add("Latest", 100);
+            addonList.Columns.Add("Installed", 110);
+            addonList.Columns.Add("State", 140);
+            addonList.OwnerDraw = true;
+            typeof(Control).GetProperty("DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(addonList, true, null);
+            addonList.DrawColumnHeader += delegate (object sender, DrawListViewColumnHeaderEventArgs e)
+            {
+                using (Brush back = new SolidBrush(Color.FromArgb(30, 29, 26))) e.Graphics.FillRectangle(back, e.Bounds);
+                using (Pen line = new Pen(RuleColor))
+                    e.Graphics.DrawLine(line, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+                Rectangle words = new Rectangle(e.Bounds.X + S(4), e.Bounds.Y, e.Bounds.Width - S(8), e.Bounds.Height);
+                TextRenderer.DrawText(e.Graphics, e.Header.Text, addonList.Font, words, Muted, TextOnly | TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+            };
+            addonList.DrawItem += delegate (object sender, DrawListViewItemEventArgs e) { };
+            addonList.DrawSubItem += delegate (object sender, DrawListViewSubItemEventArgs e)
+            {
+                Rectangle bounds = e.Bounds;
+                if (e.ColumnIndex == 0) bounds.Width = addonList.Columns[0].Width;
+                using (Brush back = new SolidBrush(e.Item.Selected ? Color.FromArgb(62, 54, 22) : Panel)) e.Graphics.FillRectangle(back, bounds);
+                Rectangle words = new Rectangle(bounds.X + S(4), bounds.Y, bounds.Width - S(8), bounds.Height);
+                TextFormatFlags flags = TextOnly | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.Left;
+                TextRenderer.DrawText(e.Graphics, e.SubItem.Text, addonList.Font, words, e.SubItem.ForeColor, flags);
+                // Survivor UI's and Survivor Plates': "(recommended)" by the name, small and green.
+                if (e.ColumnIndex == 0 && e.Item.Tag is OurAddon)
+                {
+                    if (addonSmall == null || addonSmall.Size != addonList.Font.Size * 0.8f)
+                        addonSmall = new Font(addonList.Font.FontFamily, addonList.Font.Size * 0.8f);
+                    int name = TextRenderer.MeasureText(e.Graphics, e.SubItem.Text, addonList.Font, words.Size, TextOnly).Width;
+                    Rectangle tag = new Rectangle(words.X + name + S(5), words.Y, Math.Max(0, words.Width - name - S(5)), words.Height);
+                    TextRenderer.DrawText(e.Graphics, "(recommended)", addonSmall, tag, InstalledColor, flags);
+                }
+            };
+            addonList.SelectedIndexChanged += delegate { ShowAddonPicked(); };
+            page.Controls.Add(addonList);
+
+            // Over the list at its right: every update out, at once.
+            Style(addonUpdateAll, "Update all");
+            addonUpdateAll.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            addonUpdateAll.Location = new Point(590, 24);
+            addonUpdateAll.Size = new Size(150, 26);
+            addonUpdateAll.Click += delegate { UpdateAll(); };
+            page.Controls.Add(addonUpdateAll);
+
+            addonAbout.AutoSize = false;
+            addonAbout.UseMnemonic = false;
+            addonAbout.Location = new Point(20, 300);
+            addonAbout.Size = new Size(720, 34);
+            addonAbout.ForeColor = TextColor;
+            addonAbout.BackColor = Color.Transparent;
+            addonAbout.Font = new Font("Segoe UI", 8.5f);
+            page.Controls.Add(addonAbout);
+
+            Style(addonInstall, "Install");
+            addonInstall.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            addonInstall.Location = new Point(20, 338);
+            addonInstall.Size = new Size(190, 30);
+            addonInstall.Click += delegate { InstallPicked(); };
+            page.Controls.Add(addonInstall);
+            Style(addonRemove, "Uninstall");
+            addonRemove.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            addonRemove.Location = new Point(220, 338);
+            addonRemove.Size = new Size(120, 30);
+            addonRemove.Click += delegate { RemovePicked(); };
+            page.Controls.Add(addonRemove);
+            addonUse.Text = "On in the game";
+            addonUse.AutoSize = true;
+            addonUse.Location = new Point(436, 343);
+            addonUse.FlatStyle = FlatStyle.Flat;
+            addonUse.FlatAppearance.BorderColor = TickEdge;
+            addonUse.Cursor = Cursors.Hand;
+            page.Controls.Add(addonUse);
+            TickLook(addonUse);
+            addonUse.CheckedChanged += delegate { SwitchPicked(); };
+            addonPage = Link(page, "Its page on GitHub", 610, 345, delegate
+            {
+                ListedAddon listed = PickedAddon() as ListedAddon;
+                if (listed != null) Open("https://github.com/" + listed.Repo);
+                else if (PickedAddon() is OurAddon) Open("https://github.com/" + Repo);
+            });
+
+            // The beta: lavender, its version on it; a warning first.
+            betaButton.Text = "No beta right now";
+            betaButton.FlatStyle = FlatStyle.Flat;
+            betaButton.FlatAppearance.BorderColor = Color.FromArgb(112, 86, 176);
+            betaButton.BackColor = Color.FromArgb(34, 26, 58);
+            betaButton.ForeColor = BetaColor;
+            betaButton.Cursor = Cursors.Hand;
+            betaButton.Location = new Point(220, 338);
+            betaButton.Size = new Size(200, 30);
+            betaButton.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            Active(betaButton, false, BetaColor);
+            betaButton.Click += delegate { if (IsActive(betaButton)) InstallBeta(); };
+            betaButton.Visible = false;
+            page.Controls.Add(betaButton);
+            Forge(betaButton);
+
+            Label how = Caption(page, "Only an addon's own folder comes in, never a program. Off: the game skips it, nothing deleted. " +
+                "Uninstall: its folder to the Recycle Bin, its settings kept.", 20, 375);
+            how.Font = new Font("Segoe UI", 8f);
+            how.AutoSize = false;
+            how.Size = new Size(720, 16);
+            Link(page, "Check the list again", 20, 396, delegate { AskAddons(true); });
+            Link(page, "What's new in Survivor UI", 190, 396, ShowNotesWindow);
+            Link(page, "Survivor UI's thread on the game's Discord", 390, 396, delegate { Open(AddonThread); });
+        }
+
+        // The tab opened: the list as it stands, asked again after half an hour.
+        void ShowAddonsTab()
+        {
+            FillAddons();
+            if (DateTime.Now - addonsAsked > TimeSpan.FromMinutes(30)) AskAddons(false);
+        }
+
+        void AskAddons(bool told)
+        {
+            if (addonsAsking) return;
+            addonsAsking = true;
+            if (told) Status("Asking for the list of addons and their latest releases...");
+            new Thread(delegate () { FetchAddons(told); }) { IsBackground = true }.Start();
+        }
+
+        void FetchAddons(bool told)
+        {
+            List<ListedAddon> found;
+            try { found = ReadAddons(Download(AddonsUrl)); }
+            catch { found = BuiltInAddons(); }
+            foreach (ListedAddon addon in found)
+            {
+                try { AskRelease(addon); }
+                catch (Exception error) { addon.Problem = error.Message; }
+            }
+            if (!IsHandleCreated)
+            {
+                addonsAsking = false;
+                return;
+            }
+            BeginInvoke(new Action(delegate
+            {
+                listedAddons = found;
+                addonsAsked = DateTime.Now;
+                addonsAsking = false;
+                FillAddons();
+                if (told) Status("The list of addons is up to date.");
+            }));
+        }
+
+        // The ones built in, for when the list is out of reach.
+        internal static List<ListedAddon> BuiltInAddons()
+        {
+            return new List<ListedAddon>
+            {
+                new ListedAddon
+                {
+                    Name = "ASBuilder", Author = "cadoky", Repo = "cadoky/ASBuilder", Asset = "ASBuilder-*.zip", Folders = new[] { "ASBuilder" },
+                    About = "A build planner and in-run tracker: plan a build for any class before the run, then a small window tells you what to take next.",
+                },
+                new ListedAddon
+                {
+                    Name = "Azerloot", Author = "Kindagrey", Repo = "Kindagrey/Azerloot", Asset = "Azerloot-*.zip", Folders = new[] { "Azerloot" },
+                    About = "The loot book: every boss drop, ring, trinket and amulet, a build planner, a chronicle of your runs and a wishlist that ticks itself.",
+                },
+                new ListedAddon
+                {
+                    Name = "AZSSpellMeter", Author = "kex0", Repo = "kex0/AZSSpellMeter", Asset = "AZSSpellMeter-*.zip", Folders = new[] { "AZSSpellMeter" },
+                    About = "A per-spell damage meter: the same numbers as Damage Done, plus kills per spell and the spell a proc actually casts.",
+                },
+                new ListedAddon
+                {
+                    Name = "KeijinUI", Author = "KeijinDE", Repo = "KeijinDE/KeijinUI_modern-as-ui", Asset = "KeijinUI-*.zip", Folders = new[] { "KeijinUI" },
+                    About = "A complete interface in one visual style, inspired by Dragonflight: it replaces the game's own HUD.",
+                },
+                new ListedAddon
+                {
+                    Name = "SurvivorsDragonUi", Author = "migwynkriid", Repo = "migwynkriid13/SurvivorsDragonUi",
+                    Asset = "SurvivorsDragonUi.zip", Sums = "SHA256SUMS.txt", Folders = new[] { "SurvivorsDragonUi" },
+                    About = "A HUD for Azeroth Survivors: run and boss bars, combat text, seven action buttons and counters for gold, kills and caches. Type /sdui in the game to set it up.",
+                },
+            };
+        }
+
+        // addons.json: {"addons": [{"name", "author", "repo", "asset" (its name, or a pattern with *),
+        // "sums"?, "folders", "about"?, "tag"?}, ...]}.
+        internal static List<ListedAddon> ReadAddons(string json)
+        {
+            List<ListedAddon> list = new List<ListedAddon>();
+            Dictionary<string, object> data = (Dictionary<string, object>)new JavaScriptSerializer().DeserializeObject(json);
+            foreach (object item in (System.Collections.IEnumerable)data["addons"])
+            {
+                Dictionary<string, object> entry = (Dictionary<string, object>)item;
+                Func<string, string> text = name => entry.ContainsKey(name) && entry[name] != null ? Convert.ToString(entry[name]) : null;
+                ListedAddon addon = new ListedAddon
+                {
+                    Name = text("name"), Author = text("author"), Repo = text("repo"), Asset = text("asset"),
+                    Sums = text("sums"), About = text("about"), Tag = text("tag"),
+                };
+                List<string> folders = new List<string>();
+                object[] given = entry.ContainsKey("folders") ? entry["folders"] as object[] : null;
+                if (given != null)
+                    foreach (object folder in given) folders.Add(Convert.ToString(folder));
+                addon.Folders = folders.ToArray();
+                if (addon.Name != null && addon.Repo != null && addon.Asset != null && SafeFolders(addon.Folders)) list.Add(addon);
+            }
+            return list;
+        }
+
+        // An addon's folders: plain names, never Survivor UI's.
+        internal static bool SafeFolders(string[] folders)
+        {
+            if (folders == null || folders.Length == 0) return false;
+            foreach (string folder in folders)
+            {
+                if (string.IsNullOrEmpty(folder) || folder.IndexOfAny(new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' }) >= 0 || folder.StartsWith("."))
+                    return false;
+                foreach (string ours in AddonFolders)
+                    if (string.Equals(folder, ours, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+
+        // Its release (the one pinned, else the latest): the zip's url and size,
+        // and its sha256 from the author's list beside it.
+        internal static void AskRelease(ListedAddon addon)
+        {
+            string url = "https://api.github.com/repos/" + addon.Repo + "/releases/" + (addon.Tag != null ? "tags/" + addon.Tag : "latest");
+            Dictionary<string, object> data = (Dictionary<string, object>)new JavaScriptSerializer().DeserializeObject(Download(url));
+            addon.ReleaseTag = Convert.ToString(data["tag_name"]);
+            addon.ReleaseName = data.ContainsKey("name") && data["name"] != null && Convert.ToString(data["name"]) != "" ? Convert.ToString(data["name"]) : addon.ReleaseTag;
+            string sumsUrl = null;
+            foreach (object item in (System.Collections.IEnumerable)data["assets"])
+            {
+                Dictionary<string, object> asset = (Dictionary<string, object>)item;
+                string name = Convert.ToString(asset["name"]);
+                if (addon.ZipUrl == null && AssetMatches(name, addon.Asset))
+                {
+                    addon.ZipName = name;
+                    addon.ZipUrl = Convert.ToString(asset["browser_download_url"]);
+                    addon.ZipSize = Convert.ToInt64(asset["size"]);
+                }
+                if (addon.Sums != null && name == addon.Sums) sumsUrl = Convert.ToString(asset["browser_download_url"]);
+            }
+            if (addon.ZipUrl == null) throw new Exception("its release holds no " + addon.Asset);
+            if (addon.Sums == null) return;
+            if (sumsUrl == null) throw new Exception("its release holds no " + addon.Sums);
+            foreach (string line in Download(sumsUrl).Split('\n'))
+            {
+                Match match = Regex.Match(line.Trim(), @"^([0-9a-fA-F]{64})\s+\*?(.+)$");
+                if (match.Success && match.Groups[2].Value.Trim() == addon.ZipName) addon.Sha256 = match.Groups[1].Value.ToLowerInvariant();
+            }
+            if (addon.Sha256 == null) throw new Exception(addon.Sums + " says nothing of " + addon.ZipName);
+        }
+
+        // A version older than another, both read as numbers ("3.2.55-survivors"
+        // against "3.2.57"); false when either has none.
+        internal static bool OlderThan(string mine, string theirs)
+        {
+            Version a = ParseVersion(mine), b = ParseVersion(theirs);
+            return a != null && b != null && a < b;
+        }
+
+        // A release's zip by its name, or by a pattern with * for what changes
+        // ("AZSSpellMeter-*.zip": its version in the name).
+        internal static bool AssetMatches(string name, string pattern)
+        {
+            return Regex.IsMatch(name, "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$", RegexOptions.IgnoreCase);
+        }
+
+        // "SurvivorsDragonUi 3.2.57" as 3.2.57; else its tag, short.
+        static string ShortVersion(ListedAddon addon)
+        {
+            Match match = Regex.Match(addon.ReleaseName ?? "", @"\d+(\.\d+)+");
+            if (match.Success) return match.Value;
+            string tag = addon.ReleaseTag ?? "";
+            return tag.Length > 14 ? tag.Substring(0, 14) : tag;
+        }
+
+        // An addon folder's .toc: its Title (the game's colour codes out),
+        // Version, Author; null for a folder that is no addon.
+        internal static Dictionary<string, string> TocOf(string folder)
+        {
+            string path = Path.Combine(folder, Path.GetFileName(folder) + ".toc");
+            if (!File.Exists(path)) return null;
+            Dictionary<string, string> toc = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (string line in File.ReadAllLines(path))
+                {
+                    Match match = Regex.Match(line, @"^##\s*([A-Za-z\-]+)\s*:\s*(.*)$");
+                    if (match.Success && !toc.ContainsKey(match.Groups[1].Value))
+                        toc[match.Groups[1].Value] = Regex.Replace(match.Groups[2].Value, @"\|c[0-9a-fA-F]{8}|\|r", "").Trim();
+                }
+            }
+            catch { }
+            return toc;
+        }
+
+        static string TocValue(Dictionary<string, string> toc, string key)
+        {
+            string value;
+            return toc != null && toc.TryGetValue(key, out value) ? value : "";
+        }
+
+        static bool AddonPresent(string addons, string[] folders)
+        {
+            if (addons == "" || folders.Length == 0) return false;
+            foreach (string folder in folders)
+                if (!Directory.Exists(Path.Combine(addons, folder))) return false;
+            return true;
+        }
+
+        static bool AllOn(string addons, string[] folders)
+        {
+            foreach (string folder in folders)
+                if (!AddonOn(addons, folder)) return false;
+            return true;
+        }
+
+        // A row picked from elsewhere (the update pill: Survivor UI's).
+        void PickAddon(object which)
+        {
+            foreach (ListViewItem row in addonList.Items)
+                if (row.Tag == which)
+                {
+                    row.Selected = true;
+                    row.EnsureVisible();
+                }
+        }
+
+        object PickedAddon()
+        {
+            return addonList.SelectedItems.Count > 0 ? addonList.SelectedItems[0].Tag : null;
+        }
+
+        static string[] PickedFolders(object picked)
+        {
+            ListedAddon listed = picked as ListedAddon;
+            if (listed != null) return listed.Folders;
+            OurAddon our = picked as OurAddon;
+            if (our != null) return new[] { our.Folder };
+            string folder = picked as string;
+            return folder != null ? new[] { folder } : new string[0];
+        }
+
+        static string PickedName(object picked)
+        {
+            ListedAddon listed = picked as ListedAddon;
+            if (picked is OurAddon) return ((OurAddon)picked).Name;
+            return listed != null ? listed.Name : picked as string ?? "";
+        }
+
+        // The rows: each from the list, its state (not installed, up to date,
+        // an update out, put there by hand, off); then each other addon in the
+        // AddOns folder (Survivor UI's own aside: its tab has them).
+        void FillAddons()
+        {
+            string addons = folderBox.Text.Trim();
+            object picked = PickedAddon();
+            List<string> listedFolders = new List<string>(AddonFolders);
+            addonList.BeginUpdate();
+            addonList.Items.Clear();
+            // Survivor UI and its plates: the release's state, as its install
+            // button has it (ShowUpdateState).
+            string ours = InstalledVersion(addons);
+            foreach (OurAddon our in new[] { OurUI, OurPlates })
+            {
+                bool there = addons != "" && Directory.Exists(Path.Combine(addons, our.Folder));
+                string version = our == OurUI ? ours : TocValue(there ? TocOf(Path.Combine(addons, our.Folder)) : null, "Version");
+                AddAddonRow(our, our.Name, "morderous", stable != null ? stable.Tag : "...", there ? version ?? "" : "",
+                    there, there && stable != null && ours != null && Newer(stable.Tag, ours),
+                    there && !AddonOn(addons, our.Folder) ? Muted : Color.FromArgb(255, 226, 120));
+            }
+            foreach (ListedAddon addon in listedAddons)
+            {
+                listedFolders.AddRange(addon.Folders);
+                bool present = AddonPresent(addons, addon.Folders);
+                string mine = Setting("addon." + addon.Name, "");
+                Dictionary<string, string> toc = present ? TocOf(Path.Combine(addons, addon.Folders[0])) : null;
+                // Outdated: installed from the list with an older release; put in by
+                // hand, its .toc's version older than the release's.
+                bool outdated = present && addon.ReleaseTag != null && (mine != "" ? mine != addon.ReleaseTag
+                    : OlderThan(TocValue(toc, "Version"), ShortVersion(addon)));
+                AddAddonRow(addon, addon.Name, addon.Author ?? "", addon.ReleaseTag != null ? ShortVersion(addon) : "...",
+                    TocValue(toc, "Version"), present, outdated, present && !AllOn(addons, addon.Folders) ? Muted : Gold);
+            }
+            if (addons != "" && Directory.Exists(addons))
+            {
+                foreach (string dir in Directory.GetDirectories(addons))
+                {
+                    string folder = Path.GetFileName(dir);
+                    if (listedFolders.Exists(listed => string.Equals(listed, folder, StringComparison.OrdinalIgnoreCase))) continue;
+                    Dictionary<string, string> toc = TocOf(dir);
+                    if (toc == null) continue;
+                    string title = TocValue(toc, "Title");
+                    AddAddonRow(folder, title != "" ? title : folder, TocValue(toc, "Author"), "", TocValue(toc, "Version"),
+                        true, false, AddonOn(addons, folder) ? TextColor : Muted);
+                }
+            }
+            addonList.EndUpdate();
+            FitAddonColumns();
+            foreach (ListViewItem row in addonList.Items)
+            {
+                bool same = row.Tag == picked
+                    || (picked is ListedAddon && row.Tag is ListedAddon && ((ListedAddon)picked).Name == ((ListedAddon)row.Tag).Name)
+                    || (picked is string && row.Tag is string && string.Equals((string)picked, (string)row.Tag, StringComparison.OrdinalIgnoreCase));
+                if (same)
+                {
+                    row.Selected = true;
+                    break;
+                }
+            }
+            if (addonList.SelectedItems.Count == 0 && addonList.Items.Count > 0) addonList.Items[0].Selected = true;
+            ShowAddonPicked();
+        }
+
+        // The state's column takes the width left, so the header has no light
+        // end past the last column, with or without a scroll bar.
+        void FitAddonColumns()
+        {
+            int others = 0;
+            for (int i = 0; i < addonList.Columns.Count - 1; i++) others += addonList.Columns[i].Width;
+            int row = addonList.Items.Count > 0 && addonList.IsHandleCreated ? addonList.GetItemRect(0).Height : addonList.Font.Height + S(6);
+            bool scroll = (addonList.Items.Count + 1) * row > addonList.Height - S(4);
+            int inside = addonList.Width - 2 * SystemInformation.BorderSize.Width - (scroll ? SystemInformation.VerticalScrollBarWidth : 0);
+            addonList.Columns[addonList.Columns.Count - 1].Width = Math.Max(S(100), inside - others);
+        }
+
+        // A row: its state Installed (green), Outdated (red) or Not installed
+        // (grey); its name greyed while it is off in the game.
+        void AddAddonRow(object tag, string name, string author, string latest, string installed, bool present, bool outdated, Color nameColor)
+        {
+            ListViewItem row = new ListViewItem(name);
+            row.UseItemStyleForSubItems = false;
+            row.ForeColor = nameColor;
+            row.SubItems.Add(author, TextColor, Panel, addonList.Font);
+            row.SubItems.Add(latest, TextColor, Panel, addonList.Font);
+            row.SubItems.Add(installed, TextColor, Panel, addonList.Font);
+            row.SubItems.Add(!present ? "Not installed" : outdated ? "Outdated" : "Installed",
+                !present ? Muted : outdated ? OutdatedColor : InstalledColor, Panel, addonList.Font);
+            row.Tag = tag;
+            addonList.Items.Add(row);
+        }
+
+        // The one picked: what it is, and its buttons as it stands.
+        void ShowAddonPicked()
+        {
+            showingAddon = true;
+            string addons = folderBox.Text.Trim();
+            object picked = PickedAddon();
+            ListedAddon listed = picked as ListedAddon;
+            OurAddon our = picked as OurAddon;
+            string[] folders = PickedFolders(picked);
+            bool present = AddonPresent(addons, folders);
+            bool busy = addonBusy || installing;
+            if (our != null)
+            {
+                // As the release's button has it (ShowUpdateState): the badge's
+                // state is the release installed.
+                addonInstall.Text = upToDate.Visible ? "Install again" : installButton.Text;
+                Active(addonInstall, IsActive(installButton) && !busy, Gold);
+                bool beta = betaButton.Text != "No beta right now";
+                addonAbout.Text = our.About + (stable != null ? " Latest: " + stable.Tag + "." : "") +
+                    (beta ? " Betas come before a release: more bugs, more updates." : "");
+                addonPage.Visible = true;
+            }
+            else if (listed != null)
+            {
+                string mine = Setting("addon." + listed.Name, "");
+                bool ready = listed.ZipUrl != null && (listed.Sums == null || listed.Sha256 != null);
+                addonInstall.Text = !present ? "Install"
+                    : mine == "" ? "Replace with the list's"
+                    : listed.ReleaseTag != null && mine != listed.ReleaseTag ? "Update to " + ShortVersion(listed)
+                    : "Install again";
+                Active(addonInstall, ready && !busy, Gold);
+                string about = listed.About ?? "";
+                if (listed.Problem != null) about += (about != "" ? " " : "") + "(Its release is out of reach now: " + listed.Problem + ")";
+                else if (listed.ReleaseName != null) about += (about != "" ? " " : "") + "Latest: " + listed.ReleaseName + ".";
+                addonAbout.Text = about;
+                addonPage.Visible = true;
+            }
+            else
+            {
+                addonInstall.Text = "Install";
+                Active(addonInstall, false, Gold);
+                addonAbout.Text = picked is string ? "Put in the AddOns folder by hand, not from the list: on or off, or uninstalled, here." : "";
+                addonPage.Visible = false;
+            }
+            // Survivor UI and its plates: no Uninstall (off is theirs), the beta in its place.
+            addonRemove.Visible = our == null;
+            betaButton.Visible = our != null && betaButton.Text != "No beta right now";
+            addonRemove.Enabled = present && !busy;
+            addonUse.Enabled = present && !busy;
+            List<ListedAddon> due = Updatable(addons);
+            addonUpdateAll.Text = due.Count > 1 ? "Update all (" + due.Count + ")" : "Update all";
+            Active(addonUpdateAll, due.Count > 0 && !busy, Gold);
+            addonUse.Checked = present && AllOn(addons, folders);
+            showingAddon = false;
+        }
+
+        void SwitchPicked()
+        {
+            if (showingAddon) return;
+            string addons = folderBox.Text.Trim();
+            object picked = PickedAddon();
+            string[] folders = PickedFolders(picked);
+            if (folders.Length == 0) return;
+            if (GameRunning())
+            {
+                Ask(this, "Close the game first: it reads its list of addons as it starts.", "Get more addons", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowAddonPicked();
+                return;
+            }
+            try
+            {
+                foreach (string folder in folders) SetAddonOn(addons, folder, addonUse.Checked);
+                // Survivor UI's: its update state follows it on or off.
+                if (picked is OurAddon)
+                {
+                    ShowSwitches();
+                    ShowUpdateState();
+                }
+                Status(PickedName(picked) + (addonUse.Checked ? " on: the game loads it from its next start."
+                    : " off: the game skips it from its next start; nothing is deleted."));
+            }
+            catch (Exception error)
+            {
+                Status("The game's list of addons could not be changed: " + error.Message);
+            }
+            FillAddons();
+        }
+
+        void RemovePicked()
+        {
+            if (!addonRemove.Enabled || addonBusy) return;
+            string addons = folderBox.Text.Trim();
+            object picked = PickedAddon();
+            string[] folders = PickedFolders(picked);
+            string name = PickedName(picked);
+            if (folders.Length == 0 || !SafeFolders(folders)) return;
+            if (Ask(this, "Uninstall " + name + "?\n\nIts folder goes to the Recycle Bin, where it can be taken back from. Its settings stay, should you install it again.",
+                "Get more addons", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            foreach (string folder in folders)
+            {
+                string path = Path.Combine(addons, folder);
+                if (Directory.Exists(path) && !ToRecycleBin(path))
+                {
+                    Ask(this, folder + " could not go to the Recycle Bin. If the game is open, close it and try again.",
+                        "Get more addons", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    FillAddons();
+                    return;
+                }
+            }
+            ListedAddon listed = picked as ListedAddon;
+            if (listed != null) SetSetting("addon." + listed.Name, "");
+            Status(name + " uninstalled: its folder is in the Recycle Bin.");
+            FillAddons();
+        }
+
+        void InstallPicked()
+        {
+            // Survivor UI and its plates: the release, as its button did.
+            if (PickedAddon() is OurAddon)
+            {
+                if (IsActive(addonInstall) && stable != null && !addonBusy) Install(stable);
+                return;
+            }
+            ListedAddon addon = PickedAddon() as ListedAddon;
+            if (addon == null || addonBusy || !IsActive(addonInstall)) return;
+            string addons = folderBox.Text.Trim();
+            if (addons == "" || !Directory.Exists(addons))
+            {
+                Status("The game's AddOns folder is not there: find the game first (Play, Find game...), or start it once.");
+                return;
+            }
+            if (AddonPresent(addons, addon.Folders) && Setting("addon." + addon.Name, "") == "" &&
+                Ask(this, addon.Name + " is in your AddOns folder already, put there by hand.\n\nReplace it with the list's, " + ShortVersion(addon) +
+                    "? The one there goes to the Recycle Bin first; its settings stay.", "Get more addons", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            addonBusy = true;
+            ShowAddonPicked();
+            new Thread(delegate () { DoInstallAddons(addons, new List<ListedAddon> { addon }); }) { IsBackground = true }.Start();
+        }
+
+        // Update all: every addon installed from the list with a newer release out.
+        void UpdateAll()
+        {
+            string addons = folderBox.Text.Trim();
+            List<ListedAddon> due = Updatable(addons);
+            if (due.Count == 0 || addonBusy || !IsActive(addonUpdateAll)) return;
+            addonBusy = true;
+            ShowAddonPicked();
+            new Thread(delegate () { DoInstallAddons(addons, due); }) { IsBackground = true }.Start();
+        }
+
+        // The ones installed from the list (put in by hand aside) with a newer
+        // release out, ready to take.
+        List<ListedAddon> Updatable(string addons)
+        {
+            List<ListedAddon> due = new List<ListedAddon>();
+            foreach (ListedAddon addon in listedAddons)
+            {
+                string mine = Setting("addon." + addon.Name, "");
+                bool ready = addon.ZipUrl != null && (addon.Sums == null || addon.Sha256 != null);
+                if (mine != "" && ready && addon.ReleaseTag != null && mine != addon.ReleaseTag && AddonPresent(addons, addon.Folders)) due.Add(addon);
+            }
+            return due;
+        }
+
+        // Each one's zip downloaded from its author's release and put in
+        // (PutAddon), one after the other, the release installed kept; how it
+        // went said once, at the end.
+        void DoInstallAddons(string addons, List<ListedAddon> which)
+        {
+            List<string> done = new List<string>(), failed = new List<string>();
+            int left = 0;
+            foreach (ListedAddon addon in which)
+            {
+                Status((which.Count > 1 ? "Updating " : "Downloading ") + addon.Name + " " + ShortVersion(addon) + "...");
+                string zip = Path.Combine(Path.GetTempPath(), "SurvivorUI-addon-" + Guid.NewGuid().ToString("N") + ".zip");
+                try
+                {
+                    using (WebClient client = Client())
+                        client.DownloadFile(addon.ZipUrl, zip);
+                    Status("Installing " + addon.Name + "...");
+                    left += PutAddon(addons, addon, zip);
+                    ListedAddon put = addon;
+                    BeginInvoke(new Action(delegate { SetSetting("addon." + put.Name, put.ReleaseTag); }));
+                    done.Add(addon.Name + " " + ShortVersion(addon));
+                }
+                catch (Exception error)
+                {
+                    failed.Add(addon.Name + ": " + error.Message);
+                }
+                finally
+                {
+                    try { File.Delete(zip); } catch { }
+                }
+            }
+            bool running = GameRunning();
+            BeginInvoke(new Action(delegate
+            {
+                addonBusy = false;
+                FillAddons();
+                string them = done.Count == 1 ? "it" : "them";
+                string loads = running ? "The game is open: restart it to load " + them + "." : "The game loads " + them + " the next time it starts.";
+                string stayed = left > 0 ? "\n\n" + left + " files of " + (done.Count == 1 ? "its zip" : "their zips") +
+                    " stayed out: not an addon's kind (programs, " + (done.Count == 1 ? "its author's" : "their authors'") + " tools)." : "";
+                if (failed.Count == 0)
+                {
+                    Status((which.Count > 1 ? "Updated " : "Installed ") + string.Join(", ", done.ToArray()) + ".");
+                    Ask(this, (done.Count == 1 ? done[0] + " is installed." : "Updated: " + string.Join(", ", done.ToArray()) + ".") + "\n\n" + loads + stayed,
+                        "Get more addons", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    Status("The install failed: " + failed[0]);
+                    Ask(this, (done.Count > 0 ? (which.Count > 1 ? "Updated: " : "Installed: ") + string.Join(", ", done.ToArray()) + ". " + loads + "\n\n" : "") +
+                        "Not installed:\n" + string.Join("\n", failed.ToArray()), "Get more addons", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                if (selfRelease != null && selfBox.Checked) UpdateSelf();
+            }));
+        }
+
+        // The zip checked (its size and the author's sha256), its addon folders
+        // taken out (an addon's kinds of files only) beside the AddOns folder,
+        // then put in place of the ones there, which go to the Recycle Bin:
+        // nothing of an older version stays, and nothing half done is left in
+        // the AddOns folder. How many of its files stayed out. Throws, the
+        // AddOns folder untouched, when the zip is not the one its release
+        // gives or holds no such folder.
+        internal static int PutAddon(string addons, ListedAddon addon, string zip)
+        {
+            if (addon.ZipSize > 0 && new FileInfo(zip).Length != addon.ZipSize) throw new Exception("the download is not the size its release gives");
+            if (addon.Sums != null && !string.Equals(Sha256Of(zip), addon.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("the download is not the one its author's " + addon.Sums + " gives (sha256)");
+            if (!SafeFolders(addon.Folders)) throw new Exception("its folders are not plain addon folders");
+            string staging = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(addons).TrimEnd('\\')), "_addon-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                int left = 0;
+                using (ZipArchive archive = ZipFile.OpenRead(zip))
+                {
+                    foreach (string folder in addon.Folders)
+                    {
+                        // The folder its <folder>.toc sits in, wherever in the zip
+                        // (an archive of the repository puts it under one more).
+                        string root = null;
+                        foreach (ZipArchiveEntry entry in archive.Entries)
+                        {
+                            string name = entry.FullName.Replace('\\', '/');
+                            if (!string.Equals(entry.Name, folder + ".toc", StringComparison.OrdinalIgnoreCase)) continue;
+                            string prefix = name.Substring(0, name.Length - entry.Name.Length);
+                            if (root == null || prefix.Length < root.Length) root = prefix;
+                        }
+                        if (root == null) throw new Exception("its zip holds no " + folder + ".toc");
+                        string target = Path.GetFullPath(Path.Combine(staging, folder));
+                        foreach (ZipArchiveEntry entry in archive.Entries)
+                        {
+                            string name = entry.FullName.Replace('\\', '/');
+                            if (entry.Name == "" || !name.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+                            string path = Path.GetFullPath(Path.Combine(target, name.Substring(root.Length)));
+                            if (Array.IndexOf(AddonFileKinds, Path.GetExtension(entry.Name).ToLowerInvariant()) < 0 ||
+                                !path.StartsWith(target + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                            {
+                                left++;
+                                continue;
+                            }
+                            Directory.CreateDirectory(Path.GetDirectoryName(path));
+                            entry.ExtractToFile(path, true);
+                        }
+                    }
+                }
+                foreach (string folder in addon.Folders)
+                {
+                    string there = Path.Combine(addons, folder);
+                    if (Directory.Exists(there) && !ToRecycleBin(there))
+                        throw new Exception("its folder in AddOns could not go to the Recycle Bin (is the game open?)");
+                    Directory.Move(Path.Combine(staging, folder), there);
+                }
+                return left;
+            }
+            finally
+            {
+                try { if (Directory.Exists(staging)) Directory.Delete(staging, true); } catch { }
+            }
+        }
+
+        // A folder to the Recycle Bin, by the shell's own delete with undo, no
+        // questions; Windows still warns before a folder too big for the bin
+        // would be deleted outright. True once it is gone from here.
+        internal static bool ToRecycleBin(string path)
+        {
+            const uint Delete = 3;
+            const ushort Flags = 0x40 | 0x10 | 0x4 | 0x400 | 0x4000;
+            string from = Path.GetFullPath(path) + "\0";
+            int result;
+            bool aborted;
+            if (IntPtr.Size == 8)
+            {
+                Native.FileOp64 op = new Native.FileOp64 { wFunc = Delete, pFrom = from, fFlags = Flags };
+                result = Native.FileOperation64(ref op);
+                aborted = op.fAnyOperationsAborted != 0;
+            }
+            else
+            {
+                Native.FileOp32 op = new Native.FileOp32 { wFunc = Delete, pFrom = from, fFlags = Flags };
+                result = Native.FileOperation32(ref op);
+                aborted = op.fAnyOperationsAborted != 0;
+            }
+            return result == 0 && !aborted && !Directory.Exists(path);
         }
 
         void BuildSavePage(Panel page)
@@ -3024,7 +3830,7 @@ namespace SurvivorInstaller
                 wait.Start();
             }
             ShowStrip();
-            if (currentTab == 3) ShowStats();
+            if (currentTab == StatsTab) ShowStats();
         }
 
         void AutoBackup()
@@ -3055,7 +3861,7 @@ namespace SurvivorInstaller
                         catch { }
                     }
                 Status("Save backed up as the game closed (" + where + ").");
-                if (currentTab == 2) ShowBackups();
+                if (currentTab == SaveTab) ShowBackups();
             }
             catch (Exception error)
             {
@@ -4968,7 +5774,7 @@ namespace SurvivorInstaller
             finally
             {
                 Cursor = Cursors.Default;
-                if (currentTab == 2) ShowSaveTab();
+                if (currentTab == SaveTab) ShowSaveTab();
             }
         }
 
@@ -5308,6 +6114,7 @@ namespace SurvivorInstaller
         void CheckNow()
         {
             new Thread(FetchLatest) { IsBackground = true }.Start();
+            AskAddons(false);
             CheckGame();
             if (IsHandleCreated) NoteFolders(false);
         }
@@ -5448,6 +6255,7 @@ namespace SurvivorInstaller
             bool onBeta = betaOut && installed != null && Same(pre.Tag, installed);
             betaButton.Text = !betaOut ? "No beta right now" : onBeta ? "\u2713  Beta " + pre.Tag + " installed" : "Install beta " + pre.Tag;
             Active(betaButton, betaOut && !onBeta && !installing, BetaColor);
+            if (currentTab == AddonsTab) FillAddons();
             ShowOverlay();
             // Asked from the tray: a newer one installed at once, or said so.
             if (installWhenNewer && latest != null)
@@ -6434,7 +7242,7 @@ namespace SurvivorInstaller
         {
             if (selfRelease == null || selfUpdating) return;
             // Not in the middle of installing the addons: after it.
-            if (installing)
+            if (installing || addonBusy)
             {
                 Status("The launcher updates itself once the addons are installed.");
                 return;

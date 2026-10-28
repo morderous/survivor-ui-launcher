@@ -1,13 +1,13 @@
 # Azeroth SurvivorUI Launcher (beta)
 
-A launcher for [Azeroth Survivors](https://wow.aethus.pl), a game by Aethus. It plays the game, keeps it current, and installs and updates [Survivor UI](https://github.com/morderous/survivor-ui) and Survivor Plates, its interface addons. It also backs up your save, shows your statistics and keeps your Run History.
+A launcher for [Azeroth Survivors](https://wow.aethus.pl), a game by Aethus; the launcher by morderous. It plays the game, keeps it current, and installs and updates [Survivor UI](https://github.com/morderous/survivor-ui) and Survivor Plates, its interface addons, and more addons from a list morderous checked. It also backs up your save, shows your statistics and keeps your Run History.
 
 ## Install
 
 1. Download `SurvivorUI-Installer.zip` from this repository's [Releases](../../releases/latest), unzip it and open `SurvivorInstaller.exe`.
    Windows may say "Windows protected your PC" (the program is new and not signed): click "More info", then "Run anyway".
 2. No game yet? Click **Get the game**. Have it already? The launcher finds it by itself, or click **Find game...** and pick `AzerothSurvivors.exe`.
-3. In the **Survivor UI** tab, click the gold **Install** button, then **Play**.
+3. In the **Addons** tab, Survivor UI is first (recommended): click **Install**, then **Play** in the Play tab.
 
 It updates itself from this repository's releases: leave "Update the launcher by itself" ticked. Survivor UI's own updates still come from [morderous/survivor-ui](https://github.com/morderous/survivor-ui).
 
@@ -21,7 +21,18 @@ It updates itself from this repository's releases: leave "Update the launcher by
 
 `mirrors.json` lists the mirrors Get the game offers beside Aethus' own servers (name, url, size, sha256, and a login where one is asked). The launcher reads it from this repository as it gets the game, so a mirror is added or changed here without a new launcher; it uses the ones built in when the file is out of reach. A mirror's package is taken only with the size and sha256 Aethus gave.
 
+## More addons
+
+`addons.json` lists the addons the Addons tab offers under Survivor UI, the ones morderous checked: each one's name, author, repository, its release's zip (its name, or a pattern with `*` for a version in the name), the author's sha256 list where there is one, its folders and a few words. The launcher installs each from its author's own latest release (or a `tag` pinned there), only the addon's own folder and its kinds of files, never a program, never over Survivor UI's folders. An addon is added or changed here without a new launcher; the ones built in serve when the file is out of reach.
+
 ## Changes
+
+### 1.6.0, 2026-10-28
+
+- **The Addons tab**: Survivor UI and Survivor Plates first, recommended (the release, the beta, What's new, each on or off), the Survivor UI tab folded into it; then the addons from `addons.json` (ASBuilder, Azerloot, AZSSpellMeter, KeijinUI, SurvivorsDragonUi), each from its author's latest release, checked by its size and its author's sha256 where there is one; then the ones put in by hand.
+- **Install, Update all, Uninstall, On or off**: only an addon's own folder and kinds of files come in; Uninstall sends it to the Recycle Bin, its settings kept. Installed, Not installed or Outdated in the list; an addon off greyed.
+- **The game's AddOns folder** and Check folder and move if necessary on the Play tab.
+- **Credits and feedback** under every tab: Azeroth Survivors by Aethus, the launcher by morderous, and Feedback on Discord.
 
 ### 1.5.8, 2026-10-28
 
