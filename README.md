@@ -1,5 +1,7 @@
 # Azeroth SurvivorUI Launcher (beta)
 
+> **The launcher is back in [morderous/survivor-ui](https://github.com/morderous/survivor-ui)**, its source in [`installer/`](https://github.com/morderous/survivor-ui/tree/main/installer). Download it from [Survivor UI's latest release](https://github.com/morderous/survivor-ui/releases/latest). This repository's last release, 1.6.1, takes the launchers that looked here (1.5.7 to 1.6.0) back there by themselves; nothing new comes here.
+
 A launcher for [Azeroth Survivors](https://wow.aethus.pl), a game by Aethus; the launcher by morderous. It plays the game, keeps it current, and installs and updates [Survivor UI](https://github.com/morderous/survivor-ui) and Survivor Plates, its interface addons, and more addons from a list morderous checked. It also backs up your save, shows your statistics and keeps your Run History.
 
 ## Install
@@ -26,6 +28,10 @@ It updates itself from this repository's releases: leave "Update the launcher by
 `addons.json` lists the addons the Addons tab offers under Survivor UI, the ones morderous checked: each one's name, author, repository, its release's zip (its name, or a pattern with `*` for a version in the name), the author's sha256 list where there is one, its folders and a few words. The launcher installs each from its author's own latest release (or a `tag` pinned there), only the addon's own folder and its kinds of files, never a program, never over Survivor UI's folders. An addon is added or changed here without a new launcher; the ones built in serve when the file is out of reach.
 
 ## Changes
+
+### 1.6.1, 2026-10-28
+
+- **Back in Survivor UI's repository**: it updates itself from [morderous/survivor-ui](https://github.com/morderous/survivor-ui)'s releases again, and reads its lists (`addons.json`, `mirrors.json`) from its `installer/` folder. Nothing else changes from 1.6.0.
 
 ### 1.6.0, 2026-10-28
 

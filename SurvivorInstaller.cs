@@ -56,7 +56,7 @@
 //   - in five tabs: Play, Savegame, Statistics, Run History, Addons (the
 //     Survivor UI tab folded into Addons in 1.6.0);
 //   - gets more addons (Addons tab, 1.6.0): the ones morderous checked,
-//     listed in the launcher's repository (addons.json), each from its
+//     listed beside it (installer/addons.json), each from its
 //     author's own latest release, checked by the sha256 the author gives;
 //     only an addon's own folder and its kinds of files, never a program,
 //     never over Survivor UI's folders; and the ones put in by hand: each
@@ -76,8 +76,10 @@
 //   - counts the playtime it sees (the game's process watched), for Play's
 //     numbers and Statistics;
 //   - updates itself: a release's SurvivorUI-Installer.zip carries its
-//     version in the asset's label ("Installer 1.3.0"), from 1.5.7 in the
-//     launcher's own repository (LauncherRepo). At the top right,
+//     version in the asset's label ("Installer 1.3.0"): the newest release
+//     that carries one, here in Survivor UI's repository (1.5.7 to 1.6.0
+//     looked in morderous/survivor-ui-launcher, the launcher kept apart for
+//     a while; 1.6.1 brought it back). At the top right,
 //     its version and Check for updates; a newer one lights a green arrow
 //     and the button turns to it, in the tray too; with "Update the
 //     installer by itself" (on by default) it is taken at once: the running
@@ -106,7 +108,7 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Azeroth SurvivorUI Launcher")]
 [assembly: System.Reflection.AssemblyProduct("Survivor UI")]
-[assembly: System.Reflection.AssemblyVersion("1.6.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.6.1.0")]
 
 namespace SurvivorInstaller
 {
@@ -280,10 +282,9 @@ namespace SurvivorInstaller
 
     class MainForm : Form
     {
+        // Survivor UI's releases, and the launcher's with them: back in the same
+        // repository from 1.6.1 (1.5.7 to 1.6.0 had one of their own).
         const string Repo = "morderous/survivor-ui";
-        // The launcher's own releases, apart from Survivor UI's since 1.5.7: its
-        // updates come from here, Survivor UI's from Repo.
-        const string LauncherRepo = "morderous/survivor-ui-launcher";
         const string GameExe = "AzerothSurvivors.exe";
         // Where the game usually is: its exe inside the benilla-config folder.
         const string CommonGameFolder = @"C:\Git\wenilla\benilla-config";
@@ -332,7 +333,7 @@ namespace SurvivorInstaller
         bool checkingByHand;        // Check for updates clicked: the answer said
 
         Release stable, pre;        // the newest release and the newest beta
-        Release ownStable, ownPre;  // the launcher's own newest release and beta (LauncherRepo)
+        Release ownStable, ownPre;  // the newest release and beta that carry a launcher
         Release latest;             // the one followed: the release, or a newer beta once one is installed
 
         // The tray, and the half hourly look at GitHub.
@@ -2666,9 +2667,9 @@ namespace SurvivorInstaller
 
         // --- More addons (the Addons tab) ------------------------------------------
 
-        // Other addons for the game: the ones morderous checked, listed in the
-        // launcher's repository (addons.json, the ones built in when it is out
-        // of reach), each from its author's own latest release (or one pinned
+        // Other addons for the game: the ones morderous checked, listed beside
+        // the launcher's source (installer/addons.json, the ones built in when it
+        // is out of reach), each from its author's own latest release (or one pinned
         // there), taken only with the sha256 the author gives beside it; and
         // the ones put in the AddOns folder by hand. Each switched on or off in
         // the game's list of addons (account.txt), installed, updated, or sent
@@ -2676,7 +2677,7 @@ namespace SurvivorInstaller
         // addon's kinds of files: never a program (the auto-updaters some
         // authors give, a .dll to lay beside the game, stay out). Never over
         // Survivor UI's folders.
-        const string AddonsUrl = "https://raw.githubusercontent.com/" + LauncherRepo + "/main/addons.json";
+        const string AddonsUrl = "https://raw.githubusercontent.com/" + Repo + "/main/installer/addons.json";
         static readonly string[] AddonFileKinds = { ".lua", ".xml", ".toc", ".tga", ".blp", ".ttf", ".otf", ".mp3", ".ogg", ".wav", ".txt", ".md" };
         static readonly Color InstalledColor = Color.FromArgb(90, 220, 110);
         static readonly Color OutdatedColor = Color.FromArgb(240, 96, 84);
@@ -7022,37 +7023,25 @@ namespace SurvivorInstaller
                 JavaScriptSerializer serializer = new JavaScriptSerializer();
                 serializer.MaxJsonLength = int.MaxValue;
                 System.Collections.IEnumerable list = (System.Collections.IEnumerable)serializer.DeserializeObject(json);
-                Release stable = null, pre = null;
+                // In the same list, the newest release and beta that carry a
+                // launcher: a release without one changes nothing.
+                Release stable = null, pre = null, ownNewest = null, ownNewestPre = null;
                 foreach (object item in list)
                 {
                     Dictionary<string, object> data = (Dictionary<string, object>)item;
                     if (data.ContainsKey("draft") && (bool)data["draft"]) continue;
                     bool isPre = data.ContainsKey("prerelease") && (bool)data["prerelease"];
-                    if (isPre ? pre != null : stable != null) continue;
                     Release release = Read(data, isPre);
-                    if (isPre) pre = release; else stable = release;
-                    if (stable != null && pre != null) break;
-                }
-                if (stable == null && pre == null) throw new Exception("GitHub lists no release");
-                // The launcher's own, from its own repository; none known when it
-                // cannot be reached, and Survivor UI's are shown all the same.
-                Release ownNewest = null, ownNewestPre = null;
-                try
-                {
-                    string own = Download("https://api.github.com/repos/" + LauncherRepo + "/releases?per_page=20");
-                    foreach (object item in (System.Collections.IEnumerable)serializer.DeserializeObject(own))
+                    if (isPre ? pre == null : stable == null)
                     {
-                        Dictionary<string, object> data = (Dictionary<string, object>)item;
-                        if (data.ContainsKey("draft") && (bool)data["draft"]) continue;
-                        bool isPre = data.ContainsKey("prerelease") && (bool)data["prerelease"];
-                        if (isPre ? ownNewestPre != null : ownNewest != null) continue;
-                        Release release = Read(data, isPre);
-                        if (release.InstallerVersion == null) continue;
+                        if (isPre) pre = release; else stable = release;
+                    }
+                    if (release.InstallerVersion != null && (isPre ? ownNewestPre == null : ownNewest == null))
+                    {
                         if (isPre) ownNewestPre = release; else ownNewest = release;
-                        if (ownNewest != null && ownNewestPre != null) break;
                     }
                 }
-                catch { }
+                if (stable == null && pre == null) throw new Exception("GitHub lists no release");
                 BeginInvoke(new Action<Release, Release, Release, Release>(ShowReleases), stable, pre, ownNewest, ownNewestPre);
             }
             catch (Exception error)
@@ -7122,8 +7111,7 @@ namespace SurvivorInstaller
                 if (latest.ZipUrl == null) Status("The latest release has no zip to install.");
             }
             Release newestInstaller = null;
-            // From the launcher's own repository: a Survivor UI release's installer
-            // is no longer looked at.
+            // The newest release (and, on the betas, beta) that carries one.
             foreach (Release candidate in new Release[] { ownStable, latest != null && latest.Beta ? ownPre : null })
             {
                 if (candidate == null || candidate.InstallerVersion == null) continue;
@@ -7377,7 +7365,7 @@ namespace SurvivorInstaller
 
         // The mirrors, kept in the repository so one can be added or dropped
         // without a new launcher; the ones built in when it is out of reach.
-        const string MirrorsUrl = "https://raw.githubusercontent.com/" + LauncherRepo + "/main/mirrors.json";
+        const string MirrorsUrl = "https://raw.githubusercontent.com/" + Repo + "/main/installer/mirrors.json";
         const long ProbeBytes = 2 * 1048576;
         const int ProbeMilliseconds = 4000;
         const double SlowSpeed = 256 * 1024;    // under it for a while: another source offered
